@@ -1,0 +1,58 @@
+{
+  "name": "@clipkit/cli",
+  "version": "1.0.0",
+  "description": "Clipkit CLI — init, new, validate, explain, preview, render, still, docs, schema, mcp, login. The local-first onboarding surface.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/cli" },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "type": "module",
+  "bin": {
+    "clipkit": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "embed-agents": "node ./scripts/embed-agents.mjs",
+    "prebuild": "npm run embed-agents",
+    "predev": "npm run embed-agents",
+    "pretypecheck": "npm run embed-agents",
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist src/templates/agents-content.ts",
+    "start": "node ./dist/index.js"
+  },
+  "dependencies": {
+    "@clipkit/lint": "^1.0.0",
+    "@clipkit/mcp-server": "^1.0.0",
+    "@clipkit/patterns": "^1.0.0",
+    "@clipkit/protocol": "^1.0.0",
+    "@clipkit/speech-to-text": "^1.0.0",
+    "commander": "^12.1.0",
+    "jiti": "^2.4.2",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "peerDependencies": {
+    "@clipkit/renderer": "^1.0.0",
+    "playwright": "^1.49.0"
+  },
+  "peerDependenciesMeta": {
+    "@clipkit/renderer": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@clipkit/renderer": "^1.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@clipkit/playback",
+  "version": "1.0.0",
+  "description": "Clipkit playback engine — TransportClock, worker-based renderer, frame ring buffer, and WebAudio scheduling. Drives the playground, the editor SDK preview, and any embedded Clipkit player.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/playback" },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@clipkit/runtime": "^1.0.0",
+    "@clipkit/protocol": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

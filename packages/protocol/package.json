@@ -1,0 +1,36 @@
+{
+  "name": "@clipkit/protocol",
+  "version": "1.0.0",
+  "description": "The Clipkit Protocol — types, runtime validation, and spec for the Clipkit video runtime. Implementations target this package.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/protocol" },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

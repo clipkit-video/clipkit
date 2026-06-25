@@ -1,0 +1,8 @@
+{
+  "name": "clipkit-monorepo",
+  "private": true,
+  "description": "ClipKit — the open video runtime and protocol.",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": "github:clipkit-video/clipkit",
+  "workspaces": ["packages/*", "apps/playground"]
+}

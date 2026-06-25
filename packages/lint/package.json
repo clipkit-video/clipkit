@@ -1,0 +1,38 @@
+{
+  "name": "@clipkit/lint",
+  "version": "1.0.0",
+  "description": "Protocol-aware soft checks and plain-language summaries for Clipkit Sources. Shared by the CLI and the MCP server.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/lint" },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@clipkit/protocol": "^1.0.0",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,185 @@
+/* @clipkit/editor — Tailwind v4 + shadcn-aligned design tokens.
+ *
+ * Consumers import this once: `import '@clipkit/editor/styles.css'`.
+ * The editor scopes its tree under `.clipkit-editor`; design tokens
+ * become Tailwind utilities via the `@theme` block below.
+ *
+ * Token names follow shadcn/ui's conventions (`--background`,
+ * `--foreground`, `--muted-foreground`, `--primary`, `--destructive`,
+ * etc.) so the editor blends into any shadcn-themed host app without
+ * a custom remap — hosts that override the same variable names will
+ * automatically theme the editor's internals.
+ */
+
+@import "tailwindcss";
+
+/* Scan the editor's own JSX for class usage so Tailwind knows which
+   utilities to emit. Relative to this CSS file. */
+@source "./**/*.{ts,tsx}";
+
+@theme {
+  /* ── Color palette (dark defaults, shadcn-aligned names) ─────────
+     `bg-background`, `text-foreground`, `bg-card`, `text-muted-
+     foreground`, `bg-primary`, `text-destructive`, etc. — exactly
+     the surface names a shadcn-using host already knows. */
+  /* The WEBSITE's palette (re-ruled by Ian 2026-06-11, supersedes the
+     Figma #2C2C2C ramp): panels on the site's elevated surfaces
+     (#141414/#181818, #232323 hairlines), canvas recessed at the
+     site's base #0A0A0A, site red as destructive. */
+  --color-background: #141414;
+  --color-foreground: #fafafa;
+  --color-card: #181818;
+  --color-card-foreground: #fafafa;
+  /* Popovers sit at the inspector's base surface so the lighter
+     #1f1f1f field wells read clearly inside them (ruled by Ian
+     2026-06-12); a brighter border (below) separates the floating
+     panel from whatever's behind it. */
+  --color-popover: #141414;
+  --color-popover-foreground: #fafafa;
+  /* Brighter than --color-border for floating-panel outlines. */
+  --color-popover-border: #3a3a3a;
+  --color-primary: #fafafa;
+  --color-primary-foreground: #0a0a0a;
+  --color-secondary: #161616;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #161616;
+  --color-muted-foreground: #8a8a8a;
+  --color-accent: #161616;
+  --color-accent-foreground: #fafafa;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+  --color-border: #232323;
+  --color-input: #232323;
+  --color-ring: #2e2e2e;
+  /* Text-selection band (Source pane / any editable). A muted medium
+     blue-gray: clearly visible over the dark bg, and bright enough that
+     the syntax colors — including the blue strings — stay legible on it
+     (an opaque accent reads better than a translucent tint that clashes
+     hue-for-hue with the selected text). */
+  --color-selection: #34506e;
+
+  /* ── Editor-specific tokens (no shadcn equivalent) ─────────────── */
+  --color-stage: #0a0a0a;
+  --color-stage-checker-a: #111111;
+  --color-stage-checker-b: #0e0e0e;
+  --color-yellow: #ffb800;
+  /* Input wells — filled chips, lighter than the panel (the Figma
+     mock's field treatment; ruled by Ian 2026-06-11). */
+  --color-field: #1f1f1f;
+  --color-field-hover: #262626;
+
+  /* ── Radii ──────────────────────────────────────────────────────── */
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/* Light-mode token overrides. Scoped to the editor's own subtree
+   so embedding in a page with its own theme doesn't leak either
+   direction. Variable names match the dark defaults; only the
+   values change. */
+.clipkit-editor[data-theme='light'] {
+  /* The website's warm light theme: super-light gray #FAF8F3 with the
+     dark-brown #181717 foreground and warm hairlines. */
+  --color-background: #faf8f3;
+  --color-foreground: #181717;
+  --color-card: #ffffff;
+  --color-card-foreground: #181717;
+  --color-popover: #faf8f3;
+  --color-popover-foreground: #181717;
+  --color-popover-border: #cfc8b6;
+  --color-primary: #181717;
+  --color-primary-foreground: #faf8f3;
+  --color-secondary: #f4f1e9;
+  --color-secondary-foreground: #181717;
+  --color-muted: #f4f1e9;
+  --color-muted-foreground: #6a6864;
+  --color-accent: #f4f1e9;
+  --color-accent-foreground: #181717;
+  --color-destructive: #c25555;
+  --color-destructive-foreground: #faf8f3;
+  --color-border: #e5e0d2;
+  --color-input: #e5e0d2;
+  --color-ring: #d6d0bf;
+  --color-selection: #bcd6f5; /* light blue — dark syntax reads on it */
+
+  --color-stage: #efebe0;
+  --color-stage-checker-a: #f4f1e9;
+  --color-stage-checker-b: #efebe0;
+  --color-yellow: #c99a3b;
+  --color-field: #f4f1e9;
+  --color-field-hover: #ece7d8;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────────
+   `color-scheme` flips macOS / iOS overlay scrollbars (and all
+   OS-drawn UI). ::-webkit-scrollbar handles non-overlay browsers. */
+.clipkit-editor {
+  color-scheme: dark;
+  scrollbar-color: var(--color-border) transparent;
+  scrollbar-width: thin;
+}
+.clipkit-editor[data-theme='light'] {
+  color-scheme: light;
+}
+.clipkit-editor *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.clipkit-editor *::-webkit-scrollbar-track {
+  background: transparent;
+}
+.clipkit-editor *::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.clipkit-editor *::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+  background-clip: content-box;
+}
+.clipkit-editor *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+
+/* Playhead accent (the refs' blue marker, distinct from destructive). */
+.clipkit-editor {
+  --color-playhead: #5c9be0; /* the site's --info blue */
+}
+.clipkit-editor[data-theme='light'] {
+  --color-playhead: #3f7fc4;
+}
+
+/* Source-pane (CodeMirror) syntax tokens — quiet, near-monochrome
+   with the site's info blue for strings and yellow for numbers. */
+.clipkit-editor {
+  --color-syntax-key: #c8c8c8;
+  --color-syntax-string: #5c9be0;
+  --color-syntax-number: #d9a94a;
+  --color-syntax-bool: #b18ae0;
+}
+.clipkit-editor[data-theme='light'] {
+  --color-syntax-key: #4a4844;
+  --color-syntax-string: #3f7fc4;
+  --color-syntax-number: #a87a1f;
+  --color-syntax-bool: #7a4fc0;
+}
+
+/* Source pane: the native selection paints only a (transparent) background
+   so each token keeps its own syntax color; CodeMirror's drawn band
+   (--color-selection) is the visible highlight behind the text. No `color`
+   is set here — with the global forced color removed (apps/web globals.css),
+   selected text keeps its per-token color. */
+.clipkit-editor .cm-content ::selection {
+  background: transparent !important;
+}
+.clipkit-editor .cm-content ::-moz-selection {
+  background: transparent !important;
+}
+
+/* Group-enter flash on the breadcrumb control border (Breadcrumbs.tsx). */
+@keyframes clipkit-crumb-flash {
+  0%, 18% { box-shadow: 0 0 0 2px var(--color-foreground); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}

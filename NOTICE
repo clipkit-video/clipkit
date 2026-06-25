@@ -1,0 +1,22 @@
+Clipkit
+Copyright 2026 Clipkit Contributors
+
+This product includes software developed at Clipkit.
+
+Licensed under the Apache License, Version 2.0 (the "License") for the
+following components:
+
+  - packages/schema       — The Clipkit Protocol type definitions + validators
+  - packages/runtime      — Reference browser runtime (WebGPU + WebGL2)
+  - packages/patterns     — Authoring-time pattern library
+  - packages/mcp-server   — Model Context Protocol server
+  - PROTOCOL.md           — The Clipkit Protocol specification
+
+The future `packages/render-service` component will be released under the
+Business Source License 1.1 (BSL 1.1), converting to Apache-2.0 four years
+after each release. See LICENSING.md for the rationale and BSL.template.md
+for the license text.
+
+"Clipkit" and the Clipkit logo (three rounded bars, white over yellow over
+red) are trademarks of Clipkit Contributors. See TRADEMARK.md for the
+brand-use policy.

@@ -1,0 +1,54 @@
+{
+  "name": "@clipkit/mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Clipkit — gives AI agents a video toolbox via the Clipkit schema.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/mcp-server" },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "type": "module",
+  "bin": {
+    "clipkit-mcp-server": "./dist/index.js"
+  },
+  "main": "./dist/lib.js",
+  "types": "./dist/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "default": "./dist/lib.js"
+    },
+    "./stdio": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "embed-docs": "node ./scripts/embed-docs.mjs",
+    "prebuild": "npm run embed-docs",
+    "build": "tsc",
+    "predev": "npm run embed-docs",
+    "dev": "tsc --watch",
+    "pretypecheck": "npm run embed-docs",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist src/embedded-docs.ts",
+    "start": "node ./dist/index.js"
+  },
+  "dependencies": {
+    "@clipkit/lint": "^1.0.0",
+    "@clipkit/patterns": "^1.0.0",
+    "@clipkit/protocol": "^1.0.0",
+    "@clipkit/speech-to-text": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.3"
+  }
+}

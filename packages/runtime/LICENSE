@@ -1,0 +1,54 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:              Clipkit Contributors
+
+Licensed Work:         @clipkit/runtime
+                       The Licensed Work is (c) 2026 Clipkit Contributors
+
+Additional Use Grant:  You may make use of the Licensed Work, provided
+                       that you do not use the Licensed Work for a
+                       Competing Service.
+
+                       A "Competing Service" is a commercial product or
+                       service offered to third parties that provides
+                       Clipkit Protocol video rendering as a service
+                       (whether offered as software-as-a-service, a
+                       hosted API, or any similar offering whose primary
+                       purpose is providing rendering of Clipkit
+                       Protocol documents).
+
+                       For clarity, the following uses are NOT a
+                       Competing Service and ARE permitted:
+                         - embedding the Licensed Work in your own
+                           application or website (including as a
+                           dependency of @clipkit/editor or other tools
+                           built on the runtime)
+                         - rendering videos for your own product or app
+                         - rendering videos for your own customers as
+                           part of a broader product offering
+                         - internal use within an organization
+                         - personal, educational, or research use
+                         - non-commercial open-source projects
+                         - building your own independent implementation
+                           of the Clipkit Protocol
+
+Change Date:           Four years from the date the Licensed Work is
+                       published.
+
+Change License:        Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the
+Licensed Work, please contact ianscott313@gmail.com.
+
+----------------------------------------------------------------------
+
+The canonical Business Source License 1.1 text is available at:
+
+  https://mariadb.com/bsl11/
+
+The Licensor's parameters above modify the canonical text in accordance
+with the BSL's parameter mechanism. The parameters and the canonical
+text together constitute the full license.
+</content>

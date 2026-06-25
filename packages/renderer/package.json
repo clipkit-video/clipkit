@@ -1,0 +1,56 @@
+{
+  "name": "@clipkit/renderer",
+  "version": "1.0.0",
+  "description": "Render a ClipKit Source to MP4 locally — headless Chrome + WebCodecs, driven by Playwright. The Node-side renderer for @clipkit/runtime.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build:harness": "node ./scripts/build-harness.mjs",
+    "prebuild": "npm run build:harness",
+    "predev": "npm run build:harness",
+    "pretypecheck": "npm run build:harness",
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist src/harness/embedded.ts"
+  },
+  "keywords": [
+    "clipkit",
+    "video",
+    "renderer",
+    "mp4",
+    "webcodecs",
+    "headless",
+    "playwright"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clipkit-video/clipkit.git",
+    "directory": "packages/renderer"
+  },
+  "homepage": "https://clipkit.dev",
+  "bugs": "https://github.com/clipkit-video/clipkit/issues",
+  "dependencies": {
+    "@clipkit/protocol": "^1.0.0",
+    "@clipkit/runtime": "^1.0.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.3"
+  }
+}
