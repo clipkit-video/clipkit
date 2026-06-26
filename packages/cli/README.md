@@ -112,7 +112,7 @@ clipkit render video.ts -o out.mp4 --cloud
 clipkit render video.ts -o out.mp4 --resolution 1080p
 ```
 
-Local rendering uses the optional `@clipkit/render-service` engine plus your
+Local rendering uses the optional `@clipkit/renderer` engine plus your
 installed Google Chrome. If it isn't present, the command tells you how to
 install it (or to use `--cloud`). Cloud rendering submits the job, shows live
 progress, and downloads the finished file.

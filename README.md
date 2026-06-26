@@ -6,6 +6,12 @@ structured data; get an MP4. Built for AI agents and the developers shipping the
 
 [clipkit.dev](https://clipkit.dev) · [Docs](https://clipkit.dev/docs) · [Protocol](https://clipkit.dev/docs/protocol) · [Agent quickstarts](https://clipkit.dev/docs/mcp)
 
+<div align="center">
+  <video src="https://api.clipkit.dev/storage/v1/object/public/remote-assets/clipkit-promo.mp4" controls muted playsinline width="760"></video>
+</div>
+
+<p align="center"><sub><b>↑ Made with ClipKit.</b> Every frame of this promo was rendered from a ClipKit Protocol document — no editor, no timeline UI, just structured data. <a href="https://api.clipkit.dev/storage/v1/object/public/remote-assets/clipkit-promo.mp4">▶&nbsp;Play</a> if it doesn't load inline.</sub></p>
+
 ## Quick start
 
 ```bash
