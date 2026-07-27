@@ -19,6 +19,7 @@ const docs = [
   { name: 'AGENTS_MD', path: 'AGENTS.md' },
   { name: 'PROTOCOL_MD', path: 'PROTOCOL.md' },
   { name: 'BRAND_MD', path: 'BRAND.md' },
+  { name: 'CARD_MD', path: 'CARD.md' },
 ];
 
 const out = [];

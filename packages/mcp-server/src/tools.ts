@@ -8,7 +8,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { OUTPUT_FORMATS, ELEMENT_TYPES, validate } from '@clipkit/protocol';
 import { lintSource, describe, unknownKeys, unknownElementKeys, droppedKeys } from '@clipkit/lint';
-import { AGENTS_MD, PROTOCOL_MD, BRAND_MD } from './embedded-docs.js';
+import { AGENTS_MD, PROTOCOL_MD, BRAND_MD, CARD_MD } from './embedded-docs.js';
 import { SOURCE_SCHEMA_JSON, elementSchemaJson } from './schema-json.js';
 import { toCaptionWords } from '@clipkit/speech-to-text/caption';
 // NB: `@clipkit/speech-to-text/node` (the Whisper transcriber) is imported
@@ -352,15 +352,17 @@ export function registerTools(
       description:
         'Return a canonical Clipkit doc as text. topic "agents" = the authoring guide (schema cheat ' +
         'sheet, pattern catalog, recipes, guidance — read this BEFORE composing); "protocol" = the ' +
-        'formal field spec; "brand" = brand reference. (Same docs offered as MCP resources, exposed ' +
+        'formal field spec; "brand" = brand reference; "card" = the ~8KB compact authoring card — ' +
+        'the recommended context for authoring (fetch "agents" only when the card doesn\'t cover a need). ' +
+        '(Same docs offered as MCP resources, exposed ' +
         'as a tool so you can read them directly — resources are not always model-readable.)',
       inputSchema: {
-        topic: z.enum(['agents', 'protocol', 'brand']).optional().describe('Which doc. Default "agents".'),
+        topic: z.enum(['agents', 'protocol', 'brand', 'card']).optional().describe('Which doc. Default "agents".'),
       },
     },
     async ({ topic }) => {
       const t = topic ?? 'agents';
-      const doc = t === 'protocol' ? PROTOCOL_MD : t === 'brand' ? BRAND_MD : AGENTS_MD;
+      const doc = t === 'card' ? CARD_MD : t === 'protocol' ? PROTOCOL_MD : t === 'brand' ? BRAND_MD : AGENTS_MD;
       return { content: [{ type: 'text', text: doc }] };
     },
   );

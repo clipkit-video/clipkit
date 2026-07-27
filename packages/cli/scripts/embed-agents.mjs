@@ -15,6 +15,7 @@ const outFile = join(__dirname, '..', 'src', 'templates', 'agents-content.ts');
 const docs = [
   { name: 'AGENTS_MD_CONTENT', path: 'AGENTS.md' },
   { name: 'PROTOCOL_MD_CONTENT', path: 'PROTOCOL.md' },
+  { name: 'CARD_MD_CONTENT', path: 'CARD.md' },
 ];
 
 const escape = (s) =>

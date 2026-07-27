@@ -5,17 +5,18 @@
 // no dependence on the repo layout.
 
 import { Command } from 'commander';
-import { AGENTS_MD_CONTENT, PROTOCOL_MD_CONTENT } from '../templates/agents-content.js';
+import { AGENTS_MD_CONTENT, CARD_MD_CONTENT, PROTOCOL_MD_CONTENT } from '../templates/agents-content.js';
 
 const TOPICS: Record<string, string> = {
   agents: AGENTS_MD_CONTENT,
   protocol: PROTOCOL_MD_CONTENT,
+  card: CARD_MD_CONTENT,
 };
 
 export function docsCommand(program: Command): void {
   program
     .command('docs [topic]')
-    .description('Print authoring docs (topics: agents, protocol; default: agents)')
+    .description('Print authoring docs (topics: card = compact agent context, agents, protocol; default: agents)')
     .action((topic?: string) => {
       const key = (topic ?? 'agents').toLowerCase();
       if (key === 'list') {
