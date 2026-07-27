@@ -68,7 +68,8 @@ export const EXPR_GRAMMAR_DOC =
   'mouse/audio/valueAtTime — those are Tier-B and are permanently unsupported). ' +
   `Variables: ${EXPR_VOCABULARY.vars.join(', ')} ` +
   '(t = element-local seconds, dur = element duration, i = index in a generated ' +
-  'set, n = sibling count, value = the property\'s base value). ' +
+  'set, n = sibling count, value = the property\'s base value), plus the ' +
+  'element\'s repeat_data row keys as bare identifiers (numeric values only, §3.7). ' +
   `Constants: ${EXPR_VOCABULARY.consts.join(', ')}. ` +
   `Functions (the only ones allowed): ${EXPR_VOCABULARY.functions.join(', ')}. ` +
   'linear(x,x0,x1,y0,y1) and ease(x,x0,x1,y0,y1) map x∈[x0,x1]→[y0,y1] clamped ' +
@@ -97,8 +98,10 @@ export const animationSchema = z.object({
   distance: z.number().describe('Travel distance in px (preset-specific, e.g. slide 40).').optional(),
   direction: z.enum(['left', 'right', 'up', 'down']).describe('Travel direction for slide/fly-style presets.').optional(),
   scale: z.number().min(0).max(1).describe('Squash/scale depth, 0-1 (default 0.3).').optional(),
-  seed: z.number().int().min(0).describe('Noise seed, integer (default 0).').optional(),
+  seed: z.number().int().min(0).describe('Noise seed, integer (default 0). Also seeds text-* order:"random".').optional(),
   axis: z.enum(['x', 'y', 'z']).describe('For text-flip: the 3D rotation axis (default x).').optional(),
+  order: z.enum(['forward', 'reverse', 'random']).describe('Reveal order across split units for text-* presets: "forward" (default, reading order), "reverse", or "random" (deterministic shuffle by seed; AE Randomize Order).').optional(),
+  fade: z.boolean().describe('Whether text-* entrance presets fade opacity 0→1 per unit (default true). Set false for a solid position/transform-only entrance.').optional(),
 });
 
 export const keyframeAnimationSchema = z
@@ -179,6 +182,17 @@ export const effectSchema = z.discriminatedUnion('type', [
     backdrop_saturation: effectParam.describe('Saturation of the sampled backdrop, 1 = unchanged (default 1).').optional(),
     tint: z.string().describe('Color drawn over the glass; its alpha is the tint strength. Static in v1.').optional(),
     mode: z.enum(['pill', 'dome']).describe('Lens cross-section: "pill" biconvex (default) or "dome" flat-bottom magnifier.').optional(),
+  }),
+  z.object({
+    type: z.literal('backdrop_blur'),
+    radius: effectParam.describe('Backdrop Gaussian blur sigma in px, masked to the element silhouette (default 12).').optional(),
+  }),
+  z.object({
+    type: z.literal('pixel_shader'),
+    source: z.string().min(1).describe('Pixel-Expr program: ONE expression evaluating per pixel to a color, in the Expr language + vectors/swizzles. Inputs: uv (vec2 0..1), t (sec), resolution, aspect. Functions: sin cos tan asin acos atan sinh cosh tanh abs sign sqrt exp log log2 floor ceil round trunc fract radians degrees pow atan2 mod min max step clamp mix lerp smoothstep length distance dot normalize cross reflect noise hash; constructors vec2 vec3 vec4 rgb rgba; operators + - * / % ^ and cond?a:b. With reads_backdrop, also backdrop(uv2)→vec4 samples the scene behind, and the coverage input (softened element-edge alpha) ramps backdrop offsets to 0 at the rim. Also: let NAME = EXPR; locals; def NAME(args) = EXPR; functions; declared params read by name; fold(N, init, acc-body) bounded loop (acc/i bound, N 1..256) + normal(fn, p) central-diff normal — for raymarching with the SDF stdlib (sdSphere/sdBox/sdRoundBox/sdTorus/sdPlane/sdCapsule, opUnion/opIntersect/opSubtract/opSmoothUnion/opOnion/opExtrude, rotX/Y/Z, refract). Declared image inputs (textures) are sampled with texture(name, uv)→vec4; median(a,b,c) decodes MSDF atlases. Output float→grayscale, vec3→rgb, vec4→rgba. e.g. "mix(rgb(.02,.06,.16), rgb(.7,.87,.93), noise(uv*8.0 + vec2(t*.1, 0.0)))".'),
+    reads_backdrop: z.boolean().describe('Enable backdrop(uv2)→vec4 to sample the composited scene beneath the element (refraction/ripple/chromatic). Snapshots the backdrop. Default false.').optional(),
+    params: z.record(z.union([z.number(), z.array(keyframeSchema)])).describe('Named float knobs referenced by name in source (each animatable: a number or keyframes); up to 16. Drive shader inputs from the timeline, e.g. {"warp": [{"time":0,"value":0},{"time":1,"value":1}]} then use warp in source.').optional(),
+    textures: z.record(z.string()).describe('Image inputs as {name: url}, sampled in source with texture(name, uv)→vec4 (linear/clamp sampler). Up to 4. For image distortion, MSDF wordmarks (decode median(s.r,s.g,s.b)), gradient ramps, data textures. e.g. {"logo":"https://.../logo.png"} then texture(logo, uv). URLs are preloaded as image assets.').optional(),
   }),
   z.object({
     type: z.literal('glow'),
@@ -308,6 +322,41 @@ const baseElementFields = {
   keyframe_animations: z.array(keyframeAnimationSchema).describe('Explicit per-property keyframe tracks (property + keyframes[]); use for custom motion and position paths.').optional(),
 };
 
+// Generated sets (§3.7) — image, text, shape and group elements. Binds the
+// expression grammar's reserved `i` / `n` variables (and repeat_data row
+// keys) per copy.
+const repeatRowSchema = z.record(
+  z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'row keys must be identifier-shaped'),
+  z.union([z.string(), z.number()]),
+);
+const repeatFields = {
+  repeat: z.number().int().min(2).max(500).describe('Render this element as a generated set of N identical copies (2-500). Per copy: expressions on the element\'s animatable properties see i = copy index (0-based) and n = the copy count; copy k starts repeat_stagger * k seconds after the element\'s start; the literal placeholders {i} (0-based) and {i1} (1-based) inside text/source strings are substituted. Copies share the layer and draw in i order; a group\'s children inherit the copy\'s scope. Image, text, shape and group elements only. For per-copy DATA, use repeat_data instead. (default: no repetition)').optional(),
+  repeat_data: z.array(repeatRowSchema).min(2).max(500).describe('Generated set with one copy per row — a row is a partial element patch + a variable scope: row keys that name element fields (time, duration, text, fill_color, ...) override that field for the copy; ALL row keys are also in scope for the copy and its descendants, as {key} inside text/source strings and as bare identifiers in expressions (numeric values only). Mutually exclusive with repeat (the row count is the copy count). Structural keys (id, type, layer, elements, repeat, repeat_data, repeat_stagger, style) and expression-reserved names (t, dur, i, n, value, PI, TAU, E) are rejected as row keys. Image, text, shape and group elements only.').optional(),
+  repeat_stagger: z.number().min(0).describe('Seconds between successive copies of a generated set: copy k starts at time + k * repeat_stagger. Requires repeat or repeat_data and a numeric time; ignored for a copy whose row sets time explicitly. (default 0 — all copies start together)').optional(),
+};
+
+// Source-level styles (§2.3) — named appearance bundles, the `fonts`
+// pattern generalized. Merge is one rule, no cascade:
+// runtime defaults < style < the element's own fields.
+const styleField = {
+  style: z.string().min(1).describe('Name of a Source-level `styles` bundle merged UNDER this element\'s own fields (defaults < style < element; no cascade). Appearance only. Referencing an undeclared name is a validation error. (default: none)').optional(),
+};
+export const styleSchema = z
+  .object({
+    font_family: z.string().optional(),
+    font_weight: z.union([z.string(), z.number()]).optional(),
+    font_size: z.number().positive().optional(),
+    letter_spacing: z.number().optional(),
+    fill_color: z.string().optional(),
+    stroke_color: z.string().optional(),
+    stroke_width: z.number().nonnegative().optional(),
+    gradient: z.lazy(() => textGradientSchema).optional(),
+    border_radius: z.number().nonnegative().optional(),
+    opacity: z.union([z.number(), z.array(keyframeSchema), exprSchema]).optional(),
+  })
+  .strict()
+  .describe('A named appearance bundle (§2.3), merged under an element\'s own fields when referenced via `style`. Appearance only — never identity, timing, layer or repetition.');
+
 // ────────────────────────────────────────────────────────────────────────────
 // Element variants
 // ────────────────────────────────────────────────────────────────────────────
@@ -338,6 +387,8 @@ export const videoElementSchema = z
 export const imageElementSchema = z
   .object({
     ...baseElementFields,
+    ...repeatFields,
+    ...styleField,
     type: z.literal('image'),
     source: z.string().min(1),
     fit: z.enum(['cover', 'contain', 'fill', 'none']).describe('How the image fills the box (CSS object-fit): cover (default), contain, fill, or none.').optional(),
@@ -399,6 +450,8 @@ export const textSpanSchema = z
 export const textElementSchema = z
   .object({
     ...baseElementFields,
+    ...repeatFields,
+    ...styleField,
     type: z.literal('text'),
     text: z.string().describe('The text content; use this OR spans, not both.').optional(),
     spans: z.array(textSpanSchema).describe('Rich-text runs with per-span styling; alternative to a single text string.').optional(),
@@ -409,8 +462,11 @@ export const textElementSchema = z
     font_weight: numberOrString.optional(),
     font_style: z.enum(['normal', 'italic']).optional(),
     fill_color: z.string().describe('Text color (default "#ffffff").').optional(),
+    gradient: z.lazy(() => textGradientSchema).describe('Gradient fill (linear/radial/conic), overrides fill_color. Geometric params are keyframeable/expressionable.').optional(),
     stroke_color: z.string().describe('Glyph outline color; pair with stroke_width.').optional(),
     stroke_width: z.number().describe('Glyph outline width in px (default 0).').optional(),
+    stroke_gradient: z.lazy(() => textGradientSchema).describe('Gradient stroke (linear/radial/conic), overrides stroke_color; pair with stroke_width > 0. A conic stroke with rotation:{expr:"t*60"} = a rotating rainbow outline.').optional(),
+    stroke_align: z.enum(['center', 'outer', 'inner']).describe('Stroke position vs the glyph edge (default "outer").').optional(),
     text_transform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
     text_wrap: z.boolean().describe('Soft-wrap within the box width (default true); false forces a single line.').optional(),
     text_align: z.enum(['left', 'center', 'right']).describe('Horizontal text alignment (default "left").').optional(),
@@ -432,7 +488,7 @@ export const textElementSchema = z
 // ── Gradients ──────────────────────────────────────────────────────────────
 
 export const gradientStopSchema = z.object({
-  offset: z.number().min(0).max(1).describe('Position along the gradient, 0 (start) to 1 (end).'),
+  offset: z.union([z.number(), z.array(keyframeSchema), exprSchema]).describe('Position along the gradient, 0..1. Keyframeable / expressionable — animate to slide a colour band (e.g. a white wipe).'),
   color: z.string(),
 });
 
@@ -473,23 +529,44 @@ const bloomSchema = z
   })
   .passthrough();
 
+// A scalar that may be static, keyframed, or a Tier-A expression.
+const animNumberSchema = z.union([z.number(), z.array(keyframeSchema), exprSchema]);
+
 export const linearGradientSchema = z.object({
   type: z.literal('linear'),
-  angle: z.number().describe('Gradient direction in degrees (CSS convention; default 180 = top-to-bottom).').optional(),
+  angle: animNumberSchema.describe('Gradient direction in degrees (CSS convention; default 180 = top-to-bottom). Keyframeable / expressionable.').optional(),
   stops: z.array(gradientStopSchema).min(2).max(4).describe('Color stops, 2-4.'),
 });
 
 export const radialGradientSchema = z.object({
   type: z.literal('radial'),
-  cx: z.number().describe('Center x as a fraction of the box, 0..1 (default 0.5).').optional(),
-  cy: z.number().describe('Center y as a fraction of the box, 0..1 (default 0.5).').optional(),
-  radius: z.number().positive().describe('Radius as a fraction of the box, 0..1 (default 0.5).').optional(),
+  cx: animNumberSchema.describe('Center x as a fraction of the box, 0..1 (default 0.5). Keyframeable / expressionable.').optional(),
+  cy: animNumberSchema.describe('Center y as a fraction of the box, 0..1 (default 0.5). Keyframeable / expressionable.').optional(),
+  radius: animNumberSchema.describe('Radius as a fraction of the box, 0..1 (default 0.5). Keyframeable / expressionable.').optional(),
   stops: z.array(gradientStopSchema).min(2).max(4).describe('Color stops, 2-4.'),
 });
 
+// Angular / sweep gradient — TEXT ONLY (Canvas2D; shapes use linear/radial). The
+// rotation start-angle is keyframeable/expressionable: { expr: "t*60" } spins it.
+export const conicGradientSchema = z.object({
+  type: z.literal('conic'),
+  cx: animNumberSchema.describe('Sweep center x as a fraction of the box (default 0.5). Keyframeable / expressionable.').optional(),
+  cy: animNumberSchema.describe('Sweep center y as a fraction of the box (default 0.5). Keyframeable / expressionable.').optional(),
+  rotation: animNumberSchema.describe('Start angle in degrees, clockwise (default 0). Keyframeable / expressionable — e.g. { expr: "t * 60" } for a rotating rainbow.').optional(),
+  stops: z.array(gradientStopSchema).min(2).max(8).describe('Color stops, 2-8 (a rainbow uses ~7).'),
+});
+
+// Shapes: linear/radial only (shader-rendered).
 export const gradientSchema = z.discriminatedUnion('type', [
   linearGradientSchema,
   radialGradientSchema,
+]);
+
+// Text: linear/radial/conic (Canvas2D-rendered).
+export const textGradientSchema = z.discriminatedUnion('type', [
+  linearGradientSchema,
+  radialGradientSchema,
+  conicGradientSchema,
 ]);
 
 const boxShadowSchema = z
@@ -533,6 +610,8 @@ export const pathDefSchema = z.object({
 export const shapeElementSchema = z
   .object({
     ...baseElementFields,
+    ...repeatFields,
+    ...styleField,
     type: z.literal('shape'),
     // primitive form (SDF)
     shape: z.enum(['rectangle', 'ellipse']).describe('Primitive kind: "rectangle" (default) or "ellipse". Ignored when paths is present.').optional(),
@@ -570,6 +649,7 @@ export const audioElementSchema = z
 export const groupElementSchema = z
   .object({
     ...baseElementFields,
+    ...repeatFields,
     type: z.literal('group'),
     elements: z.array(z.unknown()).min(1).describe('Child elements; the group transform composes onto all of them (couple elements without duplicating motion onto each).'),
     time_remap: z.array(keyframeSchema).describe('Keyframes that warp the group subtree clock (values are warped seconds).').optional(),
@@ -701,10 +781,18 @@ const cameraSchema = z
 // (An earlier 1.1 draft also forbade glass under un-flattened 3D; the
 // runtime now projects glass through the pane's plane homography, so
 // glass×3D is legal — §4.7.)
+// Row keys that may never appear in repeat_data (§3.7): structural element
+// fields, plus every name the expression grammar already owns.
+const ROW_KEY_RESERVED = new Set([
+  'id', 'type', 'layer', 'elements', 'repeat', 'repeat_data', 'repeat_stagger', 'style',
+  't', 'dur', 'i', 'n', 'value', 'PI', 'TAU', 'E',
+]);
+
 function checkElements(
   elements: unknown[],
   path: (string | number)[],
   ctx: z.RefinementCtx,
+  styleNames: Set<string> | null,
 ): void {
   // Uniqueness (the AE one-element-per-layer invariant): every element
   // in a container owns a distinct `layer`. Duplicates are a HARD error
@@ -736,6 +824,53 @@ function checkElements(
     const el = raw as Record<string, unknown>;
     const elPath = [...path, i];
 
+    // Generated sets (§3.7): image/text/shape/group only. Other element
+    // types silently ignoring `repeat` would render 1 copy where N were
+    // authored — reject instead.
+    const hasRepeat = el.repeat !== undefined || el.repeat_data !== undefined;
+    if (hasRepeat && typeof el.type === 'string' && !['image', 'text', 'shape', 'group'].includes(el.type)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...elPath, el.repeat !== undefined ? 'repeat' : 'repeat_data'],
+        message: 'generated sets (§3.7) are only valid on image, text, shape and group elements',
+      });
+    }
+    if (el.repeat !== undefined && el.repeat_data !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...elPath, 'repeat'],
+        message: '`repeat` and `repeat_data` are mutually exclusive — the row count IS the copy count (§3.7)',
+      });
+    }
+    if (el.repeat_stagger !== undefined && !hasRepeat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...elPath, 'repeat_stagger'],
+        message: '`repeat_stagger` requires `repeat` or `repeat_data` (§3.7)',
+      });
+    }
+    if (Array.isArray(el.repeat_data)) {
+      el.repeat_data.forEach((row, r) => {
+        if (typeof row !== 'object' || row === null) return;
+        for (const key of Object.keys(row)) {
+          if (ROW_KEY_RESERVED.has(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...elPath, 'repeat_data', r, key],
+              message: `row key "${key}" is reserved (structural element fields and expression names cannot be row keys, §3.7)`,
+            });
+          }
+        }
+      });
+    }
+    if (el.style !== undefined && styleNames !== null && typeof el.style === 'string' && !styleNames.has(el.style)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...elPath, 'style'],
+        message: `unknown style "${el.style}" — declare it in the Source-level styles map (§2.3)`,
+      });
+    }
+
     if (el.rotation !== undefined && el.z_rotation !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -745,11 +880,11 @@ function checkElements(
     }
 
     if (el.type === 'group' && Array.isArray(el.elements)) {
-      checkElements(el.elements, [...elPath, 'elements'], ctx);
+      checkElements(el.elements, [...elPath, 'elements'], ctx, styleNames);
     }
     const mask = el.mask as { elements?: unknown[] } | undefined;
     if (el.type === 'group' && mask && Array.isArray(mask.elements)) {
-      checkElements(mask.elements, [...elPath, 'mask', 'elements'], ctx);
+      checkElements(mask.elements, [...elPath, 'mask', 'elements'], ctx, styleNames);
     }
   });
 }
@@ -767,6 +902,7 @@ export const sourceSchema: z.ZodTypeAny = z
     frame_rate: z.number().positive().describe('Frames per second (default 30).').optional(),
     background_color: z.string().describe('Canvas background color (default opaque black "#000000").').optional(),
     fonts: z.array(fontFaceSchema).describe('Custom font faces to register before rendering.').optional(),
+    styles: z.record(z.string().min(1), styleSchema).describe('Named appearance bundles (§2.3) that image/text/shape elements reference via `style`. One merge rule, no cascade: defaults < style < the element\'s own fields.').optional(),
     motion_blur: z
       .object({
         samples: z.number().int().min(1).max(32).describe('Sub-frame samples, 1-32 (default 8).').optional(),
@@ -778,11 +914,27 @@ export const sourceSchema: z.ZodTypeAny = z
     lights: z.array(lightSchema).describe('Scene lights for PBR materials; omit for unlit.').optional(),
     environment: environmentSchema.describe('Environment map for material reflections.').optional(),
     bloom: bloomSchema.describe('Post-process bloom (glow on bright areas).').optional(),
+    output_dither: z
+      .union([
+        z.boolean(),
+        z
+          .object({
+            enabled: z.boolean().describe('Master switch; omit ⇒ on, false disables.').optional(),
+            amplitude: z.number().min(0).max(8).describe('Dither amplitude in 8-bit LSB (default 1 ≈ ±0.5 LSB). 0 disables.').optional(),
+            pattern: z.enum(['bayer', 'noise']).describe('Ordered Bayer (default) or static triangular-PDF noise.').optional(),
+          })
+          .passthrough(),
+      ])
+      .describe('Anti-banding output dither, DEFAULT ON. `true`/`false` or `{ enabled, amplitude, pattern }`. A global sub-LSB stipple so gradients/shadows/blur quantize to 8-bit without banding; deterministic. Distinct from the retro `dither` effect.')
+      .optional(),
     elements: z.array(elementSchema).min(1).describe('The scene content (at least one element); drawn by z-depth then layer order (layer 1 on top).'),
   })
   .passthrough()
   .superRefine((src: Record<string, unknown>, ctx: z.RefinementCtx) => {
     if (Array.isArray(src.elements)) {
-      checkElements(src.elements, ['elements'], ctx);
+      const styleNames = typeof src.styles === 'object' && src.styles !== null
+        ? new Set(Object.keys(src.styles))
+        : new Set<string>();
+      checkElements(src.elements, ['elements'], ctx, styleNames);
     }
   });

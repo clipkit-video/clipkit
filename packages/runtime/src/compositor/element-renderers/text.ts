@@ -1,7 +1,7 @@
-import type { Keyframe, TextElement, TextMask, TextSpan, Expr } from '@clipkit/protocol';
+import type { Keyframe, TextElement, TextMask, TextSpan, Expr, LinearGradient, RadialGradient, ConicGradient } from '@clipkit/protocol';
 import { isExpr, evalExpr } from '../../animation/expr.js';
 import { parseColorPremultiplied } from '../color.js';
-import { mat4ApplyToPoint, mat4Multiply, mat4PlaneAt, mat4Rotation, quadWorldTransform } from '../mat4.js';
+import { mat4ApplyToPoint, mat4Multiply, mat4PlaneAt, mat4Rotation, mat4ScaleX, mat4ScaleY, quadWorldTransform } from '../mat4.js';
 import { resolveAnchor, resolveLength } from '../unit.js';
 import { applyAnimation, resolve3D, resolveColorProperty, resolveScalePair, resolveSkewPair } from '../resolve.js';
 import {
@@ -39,7 +39,18 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
   // rasterize the text + apply the mask via Canvas2D destination-in
   // compositing, then upload as a single texture. The mask animates per
   // frame, so this re-rasterizes every render.
-  if (element.mask) {
+  // Stroke, a reveal mask, and STATIC gradient fills take the offscreen-Canvas2D
+  // path (pixel-true, but a single quad — no per-unit animation). An ANIMATED
+  // gradient fill instead flows to the glyph path below, where each glyph quad is
+  // tinted by the gradient sampled at its LAYOUT position — pixel-true AND
+  // composes with the kinetic (text-*) animation.
+  const unitAnimatedForGradient = element.gradient ? compileTextAnimations(element) !== null : false;
+  if (
+    element.mask ||
+    element.stroke_gradient ||
+    (typeof element.stroke_width === 'number' && element.stroke_width > 0) ||
+    (element.gradient && !unitAnimatedForGradient)
+  ) {
     renderMaskedTextElement(element, ctx);
     return;
   }
@@ -123,8 +134,10 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
   const yAnchor = resolveAnchor(element.y_anchor);
 
   // Apply group transform stack to the element pivot + rotation. Glyphs
-  // orbit around the world pivot by the cumulative rotation. (Group
-  // scale doesn't propagate to font_size — accept as a small limitation.)
+  // orbit around the world pivot by the cumulative rotation. A non-unit
+  // inherited scale (a group zoom/punch/bounce on text) forces the
+  // matrix path so the block scales as one plane through the chain —
+  // the fast affine path below only carries translation + rotation.
   //
   // CKP/1.0 3D (§4.4): under 3D — or any non-affine chain — the glyph
   // math runs in the element's LOCAL frame (pivot = authored position,
@@ -137,7 +150,10 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
   const textAnims = compileTextAnimations(element);
   const unitRotations = textAnims !== null && hasUnitRotations(textAnims);
   const t3d = resolve3D(element, ctx);
-  const matrixPath = t3d !== null || !ctx.modelMatrix.aff || unitRotations;
+  const inheritedScale =
+    Math.abs(mat4ScaleX(ctx.modelMatrix) - 1) > 1e-4 ||
+    Math.abs(mat4ScaleY(ctx.modelMatrix) - 1) > 1e-4;
+  const matrixPath = t3d !== null || !ctx.modelMatrix.aff || unitRotations || inheritedScale;
   let x: number, y: number, rotation: number;
   let glyphChain: import('../render-context.js').Mat4 | null = null;
   if (matrixPath) {
@@ -404,10 +420,38 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
 
   const textShadows = resolveTextShadows(element.text_shadow, opacityFactor);
 
+  // Animated gradient fill (the dispatch above routed it here): build the
+  // gradient once + the text content box used to normalize each glyph's layout
+  // position into gradient [0,1] space.
+  const glyphGradient = element.gradient ? buildGlyphGradient(element.gradient, animLocalTime) : null;
+  const gBoxLeft = blockLeft;
+  const gBoxTop = contentTop;
+  const gBoxW = Math.max(1, contentWidth);
+  const gBoxH = Math.max(1, lines.length * lineBoxHeight);
+
   // Two passes when shadows exist: pass 0 paints every glyph's shadow (so
   // shadows sit behind ALL glyphs — stacked extrusions read cleanly),
   // pass 1 paints the fills. No shadows ⇒ one fill pass (byte-identical).
   const shadowPasses = textShadows.length > 0 ? 2 : 1;
+  // Unit totals (drawn glyphs / words) — mirror the draw loop's skip
+  // logic exactly so `order: 'reverse' | 'random'` ranks against the
+  // same set the draw loop indexes.
+  let letterCount = 0;
+  let wordCount = 0;
+  {
+    let inW = false;
+    for (const lineText of lines) {
+      for (const ch of lineText) {
+        const isSpace = /\s/.test(ch);
+        if (isSpace && inW) { wordCount += 1; inW = false; }
+        else if (!isSpace) inW = true;
+        const g = atlas.glyphs.get(ch);
+        if (!g || g.width === 0 || g.height === 0) continue;
+        letterCount += 1;
+      }
+    }
+    if (inW) wordCount += 1;
+  }
   let letterIdx = 0;
   let wordIdx = 0;
   let inWord = false;
@@ -445,7 +489,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
 
     const unitLetterIdx = letterIdx;
     const fx = textAnims
-      ? evaluateUnitEffect(textAnims, animLocalTime, letterIdx, wordIdx)
+      ? evaluateUnitEffect(textAnims, animLocalTime, letterIdx, wordIdx, letterCount, wordCount)
       : null;
     letterIdx += 1;
     if (fx && fx.opacity <= 0) {
@@ -521,6 +565,23 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
     }
 
     if (drawFillPass) {
+      // Gradient fill: sample the gradient at this glyph's REST layout box (NOT
+      // its animated cell), so the color is pixel-true and travels with the glyph.
+      const gradientTint = glyphGradient
+        ? {
+            kind: glyphGradient.kind,
+            params: glyphGradient.params,
+            stops: glyphGradient.stops,
+            offsets: glyphGradient.offsets,
+            gradUV: [
+              (cursorX + g.offsetX - gBoxLeft) / gBoxW,
+              (baselineY + g.offsetY - gBoxTop) / gBoxH,
+              (cursorX + g.offsetX + g.width - gBoxLeft) / gBoxW,
+              (baselineY + g.offsetY + g.height - gBoxTop) / gBoxH,
+            ] as [number, number, number, number],
+            opacity: opacityFactor * (fx ? fx.opacity : 1),
+          }
+        : undefined;
       backend.drawTexturedQuad({
         cx: cellCx,
         cy: cellCy,
@@ -535,6 +596,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
         texture: atlas.texture,
         uvRect: [u0, v0, u1, v1],
         tint: glyphTint,
+        gradientTint,
         blend: element.blend_mode,
         alphaGamma: textAlphaGamma(glyphTint),
       });
@@ -703,11 +765,16 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
   // Apply group transform stack: translate pivot, add ambient rotation,
   // multiply opacity. Glyphs orbit the pivot below. Under 3D the same
   // local-frame + plane-matrix treatment as the plain-text path; an
-  // active text-flip forces the matrix path (§6.5).
+  // active text-flip forces the matrix path (§6.5). A non-unit inherited
+  // scale (group zoom/bounce on text) forces it too — the affine fast
+  // path carries only translation + rotation.
   const textAnims = compileTextAnimations(element);
   const unitRotations = textAnims !== null && hasUnitRotations(textAnims);
   const t3d = resolve3D(element, ctx);
-  const matrixPath = t3d !== null || !ctx.modelMatrix.aff || unitRotations;
+  const inheritedScale =
+    Math.abs(mat4ScaleX(ctx.modelMatrix) - 1) > 1e-4 ||
+    Math.abs(mat4ScaleY(ctx.modelMatrix) - 1) > 1e-4;
+  const matrixPath = t3d !== null || !ctx.modelMatrix.aff || unitRotations || inheritedScale;
   let x: number, y: number, rotation: number;
   let glyphChain: import('../render-context.js').Mat4 | null = null;
   if (matrixPath) {
@@ -820,6 +887,27 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
   let letterIdx = 0;
   let wordIdx = 0;
   let inWord = false;
+
+  // Unit totals across all spans — mirror the draw loop's skip logic so
+  // order: 'reverse' | 'random' ranks against the same indexed set.
+  let letterCount = 0;
+  let wordCount = 0;
+  {
+    let inW = false;
+    for (const line of wrappedLines) {
+      for (const sp of line.spans) {
+        for (const ch of sp.text) {
+          const isSpace = /\s/.test(ch);
+          if (isSpace && inW) { wordCount += 1; inW = false; }
+          else if (!isSpace) inW = true;
+          const g = sp.atlas.glyphs.get(ch);
+          if (!g || g.width === 0 || g.height === 0) continue;
+          letterCount += 1;
+        }
+      }
+    }
+    if (inW) wordCount += 1;
+  }
 
   // Shrink-wrapped background — ONE band PER LINE, each hugging that
   // line's glyphs (same rule as the plain-text path). Opt-in; absent ⇒
@@ -945,7 +1033,7 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
 
         const unitLetterIdx = letterIdx;
         const fx = textAnims
-          ? evaluateUnitEffect(textAnims, animLocalTime, letterIdx, wordIdx)
+          ? evaluateUnitEffect(textAnims, animLocalTime, letterIdx, wordIdx, letterCount, wordCount)
           : null;
         letterIdx += 1;
         if (fx && fx.opacity <= 0) {
@@ -1327,8 +1415,10 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
   const textW = Math.max(1, Math.ceil(metrics.width));
   const textH = Math.max(1, Math.ceil(ascent + descent));
 
-  // Add a small padding to avoid clipping AA fringes at the edges.
-  const PAD = Math.max(4, Math.ceil(fontSize * TEXT_SUPERSAMPLE * 0.1));
+  // Padding to avoid clipping AA fringes — and the stroke, which extends past
+  // the glyph bbox (an outer stroke draws up to ~stroke_width outside).
+  const strokeWss = (typeof element.stroke_width === 'number' ? element.stroke_width : 0) * TEXT_SUPERSAMPLE;
+  const PAD = Math.max(4, Math.ceil(fontSize * TEXT_SUPERSAMPLE * 0.1), Math.ceil(strokeWss * 1.5));
   const canvasW = textW + PAD * 2;
   const canvasH = textH + PAD * 2;
 
@@ -1349,22 +1439,50 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
     maskedTexts.set(cacheKey, asset);
   }
 
-  // ── Pass 1: draw the text ─────────────────────────────────────────────
+  // ── Pass 1: draw fill + stroke (solid or gradient) ────────────────────
   const offCtx = asset.ctx;
   offCtx.save();
   offCtx.setTransform(1, 0, 0, 1, 0, 0);
   offCtx.clearRect(0, 0, canvasW, canvasH);
   offCtx.font = fontSpec;
-  offCtx.fillStyle = typeof element.fill_color === 'string' ? element.fill_color : '#ffffff';
   offCtx.textBaseline = 'alphabetic';
   offCtx.textAlign = 'left';
-  offCtx.fillText(text, PAD, PAD + ascent);
+  const bx = PAD, by = PAD + ascent;
+  const fillStyle: string | CanvasGradient = element.gradient
+    ? buildCanvasGradient(offCtx, element.gradient, canvasW, canvasH, localTime)
+    : (typeof element.fill_color === 'string' ? element.fill_color : '#ffffff');
+  const hasStroke =
+    strokeWss > 0 && (element.stroke_gradient !== undefined || typeof element.stroke_color === 'string');
+  const strokeStyle: string | CanvasGradient = element.stroke_gradient
+    ? buildCanvasGradient(offCtx, element.stroke_gradient, canvasW, canvasH, localTime)
+    : (typeof element.stroke_color === 'string' ? element.stroke_color : '#ffffff');
+  offCtx.lineJoin = 'round';
+  offCtx.lineCap = 'round';
+  if (hasStroke && (element.stroke_align ?? 'outer') === 'outer') {
+    // Outer: stroke at 2× width FIRST, then the fill on top covers the inner
+    // half — leaving a clean stroke_width-wide outline outside the glyph.
+    offCtx.lineWidth = strokeWss * 2;
+    offCtx.strokeStyle = strokeStyle;
+    offCtx.strokeText(text, bx, by);
+    offCtx.fillStyle = fillStyle;
+    offCtx.fillText(text, bx, by);
+  } else {
+    offCtx.fillStyle = fillStyle;
+    offCtx.fillText(text, bx, by);
+    if (hasStroke) {
+      // center / inner ≈ a centered stroke drawn over the fill.
+      offCtx.lineWidth = strokeWss;
+      offCtx.strokeStyle = strokeStyle;
+      offCtx.strokeText(text, bx, by);
+    }
+  }
   offCtx.restore();
 
-  // ── Pass 2: apply the mask ────────────────────────────────────────────
-  const mask = element.mask!;
-  const progress = clamp01(resolveMaskProgress(mask.progress, localTime));
-  applyLinearWipeMask(offCtx, canvasW, canvasH, mask.angle ?? -45, progress, mask.softness ?? 0.3);
+  // ── Pass 2: apply the reveal mask (if any) ────────────────────────────
+  if (element.mask) {
+    const progress = clamp01(resolveMaskProgress(element.mask.progress, localTime));
+    applyLinearWipeMask(offCtx, canvasW, canvasH, element.mask.angle ?? -45, progress, element.mask.softness ?? 0.3);
+  }
 
   // ── Pass 3: upload + draw ─────────────────────────────────────────────
   backend.updateTexture(asset.texture, asset.canvas);
@@ -1388,9 +1506,14 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
   if (opacity <= 0) return;
 
   // CKP/1.0 3D (§4.4): masked text is a single flattened quad — the
-  // same block-level matrix hand-off as svg.
+  // same block-level matrix hand-off as svg. A non-unit inherited scale
+  // (group zoom/bounce) forces the matrix hand-off so the flattened quad
+  // scales through the chain rather than dropping the group's scale.
   const t3d = resolve3D(element, ctx);
-  const matrixPath = t3d !== null || !ctx.modelMatrix.aff;
+  const inheritedScale =
+    Math.abs(mat4ScaleX(ctx.modelMatrix) - 1) > 1e-4 ||
+    Math.abs(mat4ScaleY(ctx.modelMatrix) - 1) > 1e-4;
+  const matrixPath = t3d !== null || !ctx.modelMatrix.aff || inheritedScale;
   backend.drawTexturedQuad({
     cx,
     cy,
@@ -1412,6 +1535,79 @@ function resolveMaskProgress(value: number | Keyframe[] | Expr | undefined, loca
   if (isExpr(value)) return evalExpr(value, { t: localTime, dur: 0, i: 0, n: 1, value: 1 });
   if (Array.isArray(value)) return interpolateKeyframes(value, localTime);
   return 1;
+}
+
+// Resolve a possibly-animated scalar (number | Keyframe[] | Expr) at localTime.
+function resolveAnimNumber(value: number | Keyframe[] | Expr | undefined, localTime: number, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value === 'number') return value;
+  if (isExpr(value)) return evalExpr(value, { t: localTime, dur: 0, i: 0, n: 1, value: fallback });
+  if (Array.isArray(value)) return interpolateKeyframes(value, localTime);
+  return fallback;
+}
+
+// CSS linear-gradient angle (0° = to top, clockwise) → a gradient line spanning
+// the w×h box through its center.
+function cssLinearLine(angleDeg: number, w: number, h: number): [number, number, number, number] {
+  const a = (angleDeg * Math.PI) / 180;
+  const dx = Math.sin(a), dy = -Math.cos(a); // screen coords (y down)
+  const cx = w / 2, cy = h / 2;
+  const len = Math.abs(w * dx) + Math.abs(h * dy);
+  return [cx - (dx * len) / 2, cy - (dy * len) / 2, cx + (dx * len) / 2, cy + (dy * len) / 2];
+}
+
+// Build a Canvas2D gradient (linear / radial / conic) from a protocol gradient,
+// evaluating its animated params (angle / rotation / cx / cy / radius) at
+// localTime. cx/cy are box fractions; radius is a fraction of the larger side.
+function buildCanvasGradient(
+  c: OffscreenCanvasRenderingContext2D,
+  g: LinearGradient | RadialGradient | ConicGradient,
+  w: number,
+  h: number,
+  localTime: number,
+): CanvasGradient {
+  let grad: CanvasGradient;
+  if (g.type === 'radial') {
+    const cx = resolveAnimNumber(g.cx, localTime, 0.5) * w;
+    const cy = resolveAnimNumber(g.cy, localTime, 0.5) * h;
+    const r = resolveAnimNumber(g.radius, localTime, 0.5) * Math.max(w, h);
+    grad = c.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
+  } else if (g.type === 'conic') {
+    const cx = resolveAnimNumber(g.cx, localTime, 0.5) * w;
+    const cy = resolveAnimNumber(g.cy, localTime, 0.5) * h;
+    const rot = (resolveAnimNumber(g.rotation, localTime, 0) * Math.PI) / 180;
+    grad = c.createConicGradient(rot, cx, cy);
+  } else {
+    const [x0, y0, x1, y1] = cssLinearLine(resolveAnimNumber(g.angle, localTime, 180), w, h);
+    grad = c.createLinearGradient(x0, y0, x1, y1);
+  }
+  for (const s of g.stops) grad.addColorStop(clamp01(resolveAnimNumber(s.offset, localTime, 0)), s.color);
+  return grad;
+}
+
+// The per-element part of a glyph gradient (kind / params / premultiplied stops)
+// for the GPU gradient-tinted glyph path. Per-glyph gradUV + opacity are added at
+// draw time. Conventions mirror buildCanvasGradient so animated (glyph-path) and
+// static (offscreen) gradient text match. kind: 0 linear, 1 radial, 2 conic.
+function buildGlyphGradient(
+  g: LinearGradient | RadialGradient | ConicGradient,
+  localTime: number,
+): { kind: 0 | 1 | 2; params: [number, number, number, number]; stops: (readonly [number, number, number, number])[]; offsets: number[] } {
+  const n = Math.min(8, g.stops.length);
+  const stops: (readonly [number, number, number, number])[] = [];
+  const offsets: number[] = [];
+  for (let i = 0; i < n; i++) {
+    stops.push(parseColorPremultiplied(g.stops[i]!.color));
+    offsets.push(clamp01(resolveAnimNumber(g.stops[i]!.offset, localTime, 0)));
+  }
+  if (g.type === 'radial') {
+    return { kind: 1, params: [resolveAnimNumber(g.cx, localTime, 0.5), resolveAnimNumber(g.cy, localTime, 0.5), resolveAnimNumber(g.radius, localTime, 0.5), 0], stops, offsets };
+  }
+  if (g.type === 'conic') {
+    return { kind: 2, params: [resolveAnimNumber(g.cx, localTime, 0.5), resolveAnimNumber(g.cy, localTime, 0.5), resolveAnimNumber(g.rotation, localTime, 0) / 360, 0], stops, offsets };
+  }
+  const a = (resolveAnimNumber(g.angle, localTime, 180) * Math.PI) / 180;
+  return { kind: 0, params: [Math.sin(a), -Math.cos(a), 0, 0], stops, offsets };
 }
 
 /**

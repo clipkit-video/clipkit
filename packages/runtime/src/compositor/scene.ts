@@ -12,6 +12,7 @@ import { interpolateKeyframes } from '../animation/keyframes.js';
 import type { Backend, BlendMode, StylizeMode, Texture } from '../backend/backend.js';
 import { isProgrammableBlend } from '../backend/backend.js';
 import { getLogger } from '../logger.js';
+import { compilePixelExpr, buildGlslFragment, buildWgslFragment } from '../pixel-expr/index.js';
 import { buildAsciiAtlasCanvas } from './bitfont.js';
 import { parseColor } from './color.js';
 import type { RGBA } from './color.js';
@@ -25,6 +26,7 @@ import { renderTextElement } from './element-renderers/text.js';
 import { renderVideoElement } from './element-renderers/video.js';
 import { applyAnimation, applyAspectRatio, depthOrder, resolve3D, resolveScalePair } from './resolve.js';
 import { applyModelTransform, mat4Multiply } from './mat4.js';
+import { normalizeWalk } from './repeat.js';
 import { resolveAnchor, resolveLength } from './unit.js';
 import { anchorToCenter, quadMatrix3D } from './transform.js';
 import type { GroupClipTarget, RenderContext } from './render-context.js';
@@ -47,7 +49,8 @@ export function renderSourceFrame(source: Source, ctx: RenderContext): void {
   // layer keep definition order. Then (§4.4.3) the list is re-ordered
   // back-to-front by depth (`z`); equal depths keep this layer order.
   // With all z = 0 this is pure layer order.
-  let ordered = [...source.elements].sort((a, b) => layerOf(b) - layerOf(a));
+  ctx.styles = source.styles as RenderContext['styles'];
+  let ordered = [...normalizeWalk(source.elements, source.styles)].sort((a, b) => layerOf(b) - layerOf(a));
   if (ctx.depthSort) ordered = depthOrder(ordered, ctx);
 
   for (const element of ordered) {
@@ -172,6 +175,19 @@ type ResolvedEffect =
       bevelMode: number;     // 0 pill, 1 dome
       shadowAlpha: number;
       tint: RGBA;
+    }
+  | {
+      kind: 'backdrop-blur';
+      radius: number;        // backdrop blur σ in px
+    }
+  | {
+      kind: 'pixel-shader';
+      glslSource: string;    // full GLSL ES 3.0 fragment (assembled)
+      wgslSource: string;    // full WGSL (assembled)
+      readsBackdrop: boolean; // program calls backdrop() → needs the snapshot
+      usesCoverage: boolean;  // program reads coverage() → soften (blur) the mask
+      params: number[];       // resolved param values this frame (≤16)
+      textures: (Texture | undefined)[]; // declared image inputs in slot order (≤4)
     };
 
 function resolveEffects(element: Element, ctx: RenderContext): ResolvedEffect[] {
@@ -334,6 +350,22 @@ function resolveEffects(element: Element, ctx: RenderContext): ResolvedEffect[] 
         });
         break;
       }
+      case 'backdrop_blur':
+        out.push({ kind: 'backdrop-blur', radius: Math.max(0, param(fx.radius, 12)) });
+        break;
+      case 'pixel_shader': {
+        const readsBackdrop = fx.reads_backdrop === true;
+        const paramNames = fx.params ? Object.keys(fx.params) : [];
+        const texNames = fx.textures ? Object.keys(fx.textures) : [];
+        const compiled = compilePixelExpr(fx.source, { backdrop: readsBackdrop, params: paramNames, textures: texNames });
+        if (!compiled.ok) { getLogger().warn(`pixel_shader skipped — ${compiled.error}`); break; }
+        const params = paramNames.map((name) => param(fx.params![name]!, 0));
+        // Resolve declared image inputs (slot-aligned). Not-yet-loaded → undefined;
+        // the draw path binds the layer there (the program won't sample it).
+        const textures = texNames.map((name) => ctx.images.get(String(fx.textures![name]))?.texture);
+        out.push({ kind: 'pixel-shader', glslSource: buildGlslFragment(compiled), wgslSource: buildWgslFragment(compiled), readsBackdrop, usesCoverage: compiled.usesCoverage, params, textures });
+        break;
+      }
       default:
         // Future effect types: skip with a warning, keep the element.
         getLogger().warn(`unknown effect type — skipped: ${String((fx as { type?: unknown }).type)}`);
@@ -352,6 +384,16 @@ function asciiAtlasFor(backend: Backend): Texture {
     asciiAtlases.set(backend, atlas);
   }
   return atlas;
+}
+
+/**
+ * Effects that sample the composited backdrop beneath the element (§4.7),
+ * so the surface must be snapshotted before this element's layer renders.
+ * Today `glass` and `backdrop_blur`; future backdrop-reading effects
+ * (e.g. pixel shaders that declare reads_backdrop) join here.
+ */
+function effectReadsBackdrop(fx: ResolvedEffect): boolean {
+  return fx.kind === 'glass' || fx.kind === 'backdrop-blur' || (fx.kind === 'pixel-shader' && fx.readsBackdrop);
 }
 
 function renderLayeredElement(
@@ -385,7 +427,7 @@ function renderLayeredElement(
   const progMode = isProgrammableBlend(element.blend_mode) ? element.blend_mode : undefined;
   let backdropSnap: GroupClipTarget | null = null;
   let backdropFlipY = false;
-  if (progMode || effects.some((fx) => fx.kind === 'glass')) {
+  if (progMode || effects.some(effectReadsBackdrop)) {
     backdropSnap = acquireFilterTarget(ctx, `${keyBase}::bd`, sw, sh);
     backdropFlipY = backend.copySurfaceTo(backdropSnap.target).flippedY;
   }
@@ -439,6 +481,42 @@ function renderLayeredElement(
         tint: fx.tint,
         blend,
       }));
+    } else if (fx.kind === 'backdrop-blur') {
+      // Backdrop blur (§4.7) — frost the snapshot within the element's
+      // silhouette, then paint the element over it. The snapshot was
+      // taken pre-layer (above); blur it with the normative ladder.
+      // Works on any element type (mask = the element's own alpha).
+      passes.push((src, blend) => {
+        const snap = backdropSnap!;
+        const blurred = fx.radius > 0
+          ? blurLadder(ctx, `${keyBase}::bdblur`, snap.target.texture, fx.radius, sw, sh)
+          : snap.target.texture;
+        backend.drawBackdropBlurQuad({
+          cx, cy, width: sw, height: sh,
+          layer: src, backdrop: blurred, backdropFlipY, blend,
+        });
+      });
+    } else if (fx.kind === 'pixel-shader') {
+      // Pixel-Expr program (§4.7) — the backend compiles + caches the
+      // emitted GLSL/WGSL by source; here we feed the layer (its alpha
+      // masks the program output) and element-local time as `t`.
+      const elementStart = ctx.timeOffset + numberOrZero(element.time);
+      const localT = ctx.time - elementStart;
+      passes.push((src, blend) => {
+        const bd = fx.readsBackdrop && backdropSnap ? backdropSnap.target.texture : src;
+        // Soften the mask when the program reads `coverage`, so edges ramp
+        // (displacement → 0 at the rim) instead of cutting. Both the output
+        // footprint mask and the `coverage` input read this layer's alpha.
+        const maskLayer = fx.usesCoverage ? blurLadder(ctx, `${keyBase}::pxcov`, src, 24, sw, sh) : src;
+        backend.drawPixelShaderQuad({
+          cx, cy, width: sw, height: sh,
+          layer: maskLayer, backdrop: bd, backdropFlipY: fx.readsBackdrop ? backdropFlipY : false,
+          glslSource: fx.glslSource, wgslSource: fx.wgslSource,
+          time: localT, params: fx.params,
+          textures: fx.textures.map((tx) => tx ?? src),
+          blend,
+        });
+      });
     } else {
       // Glass (§4.7) — analytic: the pane geometry comes from the shape
       // element itself (rounded-rect SDF in-shader, the liquidglass

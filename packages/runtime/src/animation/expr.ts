@@ -6,10 +6,12 @@
 // bakeable to keyframes, and GPU-shaped.
 //
 // This is a real sandbox — a tokenizer + Pratt parser + tree-walk evaluator,
-// NOT eval()/Function(). It accepts ONLY the closed grammar below; an unknown
-// identifier, member access, assignment, statement, or string is a parse error,
-// and the caller falls back to the property's base value. There are no host
-// objects in scope and no loops, so evaluation is bounded and non-recursive.
+// NOT eval()/Function(). It accepts ONLY the closed grammar below; member
+// access, assignment, statements, and strings are parse errors. Identifiers
+// resolve at eval — constants → builtin scope → the copy's repeat_data row
+// (§3.7) — and an unknown one yields NaN, so the caller falls back to the
+// property's base value. There are no host objects in scope and no loops, so
+// evaluation is bounded and non-recursive.
 
 import { EXPR_VOCABULARY } from '@clipkit/protocol';
 import { noise1d, hash01 } from './noise1d.js';
@@ -20,6 +22,13 @@ export interface ExprScope {
   /** index within a generated set */ i: number;
   /** sibling count */ n: number;
   /** the property's base/static value */ value: number;
+  /**
+   * The copy's `repeat_data` row (§3.7): row keys resolve as bare
+   * identifiers. Numeric values only — a string value (or a missing
+   * key) resolves NaN, so the property falls back to its base value,
+   * same as any unknown identifier.
+   */
+  vars?: Readonly<Record<string, number | string>>;
 }
 
 // ── AST ──────────────────────────────────────────────────────────────────────
@@ -33,7 +42,6 @@ type Node =
 
 const CONSTS = { PI: Math.PI, TAU: Math.PI * 2, E: Math.E } satisfies Record<string, number>;
 // The variable set is the protocol vocabulary verbatim (single source of truth).
-const VARS = new Set<string>(EXPR_VOCABULARY.vars);
 
 // Native functions: (args, scope) → number. Pure; `wiggle` reads scope.t.
 const FNS = {
@@ -70,7 +78,8 @@ type _MissingFns = Exclude<(typeof EXPR_VOCABULARY.functions)[number], keyof typ
 type _ExtraFns = Exclude<keyof typeof FNS, (typeof EXPR_VOCABULARY.functions)[number]>;
 type _MissingConsts = Exclude<(typeof EXPR_VOCABULARY.consts)[number], keyof typeof CONSTS>;
 type _MissingVars = Exclude<(typeof EXPR_VOCABULARY.vars)[number], keyof ExprScope>;
-type _ExtraVars = Exclude<keyof ExprScope, (typeof EXPR_VOCABULARY.vars)[number]>;
+// `vars` is the repeat_data row bag (§3.7), not a grammar variable — exempt.
+type _ExtraVars = Exclude<keyof ExprScope, (typeof EXPR_VOCABULARY.vars)[number] | 'vars'>;
 const _exprVocabularyLock: [
   _MissingFns | _ExtraFns | _MissingConsts | _MissingVars | _ExtraVars,
 ] extends [never]
@@ -78,8 +87,9 @@ const _exprVocabularyLock: [
   : ['EXPR_VOCABULARY drift — runtime FNS/CONSTS/scope must match the protocol vocabulary'] = true;
 void _exprVocabularyLock;
 
-// String-keyed views for eval-time lookup — the parser has already validated
-// every name against the closed vocabulary, so these accesses are total.
+// String-keyed views for eval-time lookup. Function names ARE validated at
+// parse (unknown call → reject); variable identifiers resolve at eval so
+// repeat_data row keys can bind without reparsing per copy.
 const FN_TABLE = FNS as Record<string, (a: number[], s: ExprScope) => number>;
 const CONST_TABLE = CONSTS as Record<string, number>;
 
@@ -132,8 +142,11 @@ function parse(toks: Tok[]): Node | null {
         if (!(tk.v in FNS)) return null; // unknown function → reject
         return { k: 'call', name: tk.v, args };
       }
-      if (tk.v in CONSTS || VARS.has(tk.v)) return { k: 'var', name: tk.v };
-      return null; // unknown identifier → reject
+      // Identifier resolution is deferred to eval (constants → builtin
+      // scope → repeat_data row vars → NaN, which falls back to the
+      // base value). Parse stays closed: still no member access,
+      // strings, or assignment.
+      return { k: 'var', name: tk.v };
     }
     return null;
   }
@@ -162,7 +175,15 @@ function parse(toks: Tok[]): Node | null {
 function evalNode(node: Node, s: ExprScope): number {
   switch (node.k) {
     case 'num': return node.v;
-    case 'var': return node.name in CONST_TABLE ? CONST_TABLE[node.name]! : (s as unknown as Record<string, number>)[node.name]!;
+    case 'var': {
+      if (node.name in CONST_TABLE) return CONST_TABLE[node.name]!;
+      switch (node.name) {
+        case 't': return s.t; case 'dur': return s.dur; case 'i': return s.i;
+        case 'n': return s.n; case 'value': return s.value;
+      }
+      const v = s.vars?.[node.name];
+      return typeof v === 'number' ? v : NaN;
+    }
     case 'un': return node.op === '-' ? -evalNode(node.a, s) : evalNode(node.a, s) === 0 ? 1 : 0;
     case 'tern': return evalNode(node.c, s) !== 0 ? evalNode(node.a, s) : evalNode(node.b, s);
     case 'call': return FN_TABLE[node.name]!(node.args.map((a) => evalNode(a, s)), s);

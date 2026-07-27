@@ -28,9 +28,15 @@ export const SERVER_INSTRUCTIONS =
   'validate_project / describe_project for a structural read-back with render-time warnings. ' +
   'The loop is edit → preview_still → fix. ' +
   'CAPTIONS: transcribe_to_captions turns a media url (or local file) into a timed caption. ' +
-  'DELIVER: open_in_editor returns a free editor link; load_project re-imports a shared ' +
-  'project by id/URL; render_video renders a finished MP4 in the cloud (paid; needs ' +
-  'CLIPKIT_API_KEY). ' +
+  'MEDIA: to use an image/video/audio that is not already a stable public URL (or to make a ' +
+  'link durable so it cannot rot), call ingest_asset to host it and get a stable url for an ' +
+  "element's `url`. " +
+  'DELIVER: ALWAYS deliver by calling open_in_editor and giving the user that free link — ' +
+  'it opens the project in the editor where they preview and render the video themselves in ' +
+  'the browser. This is the default and almost always what you want. load_project re-imports ' +
+  'a shared project by id/URL. Do NOT call render_video unless the user EXPLICITLY asks you to ' +
+  'render/export a finished MP4 file for them; it is the paid cloud path (consumes credits, ' +
+  'needs CLIPKIT_API_KEY) and is not offered on the hosted connector. ' +
   'PROJECT IDS: create_project / set_project / create_promo / load_project return a ' +
   'project_id; pass it to subsequent tools (get_project / edit_element / preview_still / ' +
   'validate_project / render_video / …). When working on a single local project you may omit it.';

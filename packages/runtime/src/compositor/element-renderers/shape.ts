@@ -1,4 +1,6 @@
-import type { LinearGradient, RadialGradient, ShapeElement } from '@clipkit/protocol';
+import type { LinearGradient, RadialGradient, ShapeElement, Keyframe, Expr } from '@clipkit/protocol';
+import { isExpr, evalExpr } from '../../animation/expr.js';
+import { interpolateKeyframes } from '../../animation/keyframes.js';
 import { parseColor, parseColorPremultiplied } from '../color.js';
 import { applyModelTransform, quadWorldTransform } from '../mat4.js';
 import { resolveAnchor, resolveLength } from '../unit.js';
@@ -71,8 +73,12 @@ export function renderShapeElement(element: ShapeElement, ctx: RenderContext): v
   const isEllipse = shapeName.toLowerCase() === 'ellipse';
 
   // Parse gradient if present. Hex stops → premultiplied RGBA; angle deg → rad.
+  // Geometric params (angle/cx/cy/radius) are evaluated at localTime so they can
+  // be keyframed or expression-driven (e.g. a rotating linear gradient).
+  const gradElementStart = ctx.timeOffset + numberOr(element.time, 0);
+  const gradLocalTime = ctx.time - gradElementStart;
   const gradient = element.gradient
-    ? compileGradient(element.gradient, w.opacity01)
+    ? compileGradient(element.gradient, w.opacity01, gradLocalTime)
     : undefined;
 
   // Stroke (border) — the SDF in SHAPE_FS paints the stroke band
@@ -170,15 +176,24 @@ function straightWithOpacity(
   return [c[0], c[1], c[2], c[3] * opacityFactor];
 }
 
+function resolveAnimNumber(value: number | Keyframe[] | Expr | undefined, localTime: number, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value === 'number') return value;
+  if (isExpr(value)) return evalExpr(value, { t: localTime, dur: 0, i: 0, n: 1, value: fallback });
+  if (Array.isArray(value)) return interpolateKeyframes(value, localTime);
+  return fallback;
+}
+
 function compileGradient(
   g: LinearGradient | RadialGradient,
   opacity01: number,
+  localTime: number,
 ): BackendGradient {
   const opacityFactor = Math.max(0, Math.min(1, opacity01));
   const stops = g.stops.slice(0, 4).map((s) => {
     const c = parseColorPremultiplied(s.color);
     return {
-      offset: Math.max(0, Math.min(1, s.offset)),
+      offset: Math.max(0, Math.min(1, resolveAnimNumber(s.offset, localTime, 0))),
       color: [
         c[0] * opacityFactor,
         c[1] * opacityFactor,
@@ -193,14 +208,14 @@ function compileGradient(
     // 180° = to bottom). Default 180 (to bottom). The shader projects
     // centered UV onto (cos, sin) of its angle, whose basis is 0° = +x
     // (right), 90° = +y (down) — so map CSS θ → shader (θ − 90).
-    const angleDeg = typeof g.angle === 'number' ? g.angle : 180;
+    const angleDeg = resolveAnimNumber(g.angle, localTime, 180);
     return { type: 'linear', angle: ((angleDeg - 90) * Math.PI) / 180, stops };
   }
   return {
     type: 'radial',
-    cx: typeof g.cx === 'number' ? g.cx : 0.5,
-    cy: typeof g.cy === 'number' ? g.cy : 0.5,
-    radius: typeof g.radius === 'number' ? g.radius : 0.5,
+    cx: resolveAnimNumber(g.cx, localTime, 0.5),
+    cy: resolveAnimNumber(g.cy, localTime, 0.5),
+    radius: resolveAnimNumber(g.radius, localTime, 0.5),
     stops,
   };
 }

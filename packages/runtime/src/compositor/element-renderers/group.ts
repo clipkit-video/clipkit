@@ -4,6 +4,7 @@ import { applyModelTransform, mat4Identity, mat4Multiply, mat4TRS, mat4TRS3D, qu
 import { resolveAnchor, resolveLength } from '../unit.js';
 import { anchorToCenter } from '../transform.js';
 import { applyAnimation, depthOrder, resolve3D, resolveScalePair } from '../resolve.js';
+import { normalizeWalk } from '../repeat.js';
 import { resolveMaterial } from '../lighting.js';
 import { buildLitParams } from './lit.js';
 import { getLogger } from '../../logger.js';
@@ -42,8 +43,14 @@ export function renderGroupElement(el: GroupElement, ctx: RenderContext): void {
   if (opFactor === 0) return;
 
   const { canvas } = ctx;
-  const x = resolveLength(el.x as never, canvas.width, canvas);
-  const y = resolveLength(el.y as never, canvas.height, canvas);
+  // x/y are animatable (keyframes + motion paths), exactly like leaf
+  // elements (image/shape/text all wrap resolveLength in applyAnimation).
+  // Without this a group's position keyframes are silently dropped — a
+  // translating group stays at its base x/y. That desynced track-matte
+  // pairs whose mask SHAPE panned (shapes animate x/y) while the content
+  // GROUP did not, splitting the framed photo into a thin sliver.
+  const x = applyAnimation(el, 'x', resolveLength(el.x as never, canvas.width, canvas), ctx);
+  const y = applyAnimation(el, 'y', resolveLength(el.y as never, canvas.height, canvas), ctx);
   const width = el.width !== undefined
     ? resolveLength(el.width as never, canvas.width, canvas)
     : 0;
@@ -62,7 +69,7 @@ export function renderGroupElement(el: GroupElement, ctx: RenderContext): void {
   // layer 1 on top). The plain-group path below re-orders by depth
   // (`z`) when ctx.depthSort is set; the flattened layer keeps this
   // layer order (its children are coplanar in the flat layer).
-  const sortedChildren = [...el.elements].sort(
+  const sortedChildren = [...normalizeWalk(el.elements, ctx.styles as never)].sort(
     (a, b) => numberOr(b.layer, Number.MAX_SAFE_INTEGER) - numberOr(a.layer, Number.MAX_SAFE_INTEGER),
   );
 

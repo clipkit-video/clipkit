@@ -22,6 +22,8 @@ import type {
   Backend,
   BackendCapabilities,
   BackdropBlendDrawParams,
+  BackdropBlurQuadDrawParams,
+  PixelShaderQuadDrawParams,
   BlendMode,
   FilteredQuadDrawParams,
   GlassQuadDrawParams,
@@ -43,6 +45,37 @@ interface WebGPUTexture extends Texture {
 
 // ─── Shaders ────────────────────────────────────────────────────────────────
 
+// Anti-banding output dither (§9.4) — WGSL twin of DITHER_GLSL in the
+// WebGL backend. A sub-LSB perturbation added as a smooth float ramp is
+// written to the 8-bit target, so gradients, soft shadows and blur
+// falloffs cross 8-bit steps as a fine stipple instead of hard diagonal
+// bands. `code` packs amplitude (magnitude, in 8-bit LSB) and pattern
+// (sign: + ordered Bayer, − static TPDF noise); 0 disables. Keyed to the
+// fragment position (no time term) so renders stay deterministic and the
+// grain never shimmers. Prepended (before fsMain — WGSL has no forward
+// refs) into every smooth-ramp shader.
+const DITHER_WGSL = /* wgsl */ `
+fn ckDitherOffset(fc: vec2<f32>, code: f32) -> f32 {
+  let amp = abs(code);
+  if (amp <= 0.0) { return 0.0; }
+  var t: f32;
+  if (code < 0.0) {
+    let r1 = fract(sin(dot(fc, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let r2 = fract(sin(dot(fc + vec2<f32>(0.5, 0.5), vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    t = (r1 + r2 - 1.0) * 0.5;             // triangular PDF, (-0.5, 0.5)
+  } else {
+    let ix = i32(floor(fc.x)) % 4;
+    let iy = i32(floor(fc.y)) % 4;
+    var bayer = array<f32, 16>(0.,8.,2.,10., 12.,4.,14.,6., 3.,11.,1.,9., 15.,7.,13.,5.);
+    t = (bayer[iy * 4 + ix] + 0.5) / 16.0 - 0.5;   // ordered, (-0.5, 0.5)
+  }
+  return t * (amp / 255.0);
+}
+fn ckDither(c: vec4<f32>, fc: vec2<f32>, code: f32) -> vec4<f32> {
+  return clamp(c + ckDitherOffset(fc, code), vec4<f32>(0.0), vec4<f32>(1.0));
+}
+`;
+
 // Shape pipeline: solid-color rectangles + ellipses + rounded rectangles,
 // with optional shader-level stroke. The stroke band is painted directly
 // from the SDF — no compositing through the fill — so it stays clean
@@ -61,9 +94,10 @@ struct ShadowUniforms {
   _pad0: f32,                // 4 bytes,  offset 92   — std140 alignment
   size: vec2<f32>,           // 8 bytes,  offset 96   — shape size
   quadSize: vec2<f32>,       // 8 bytes,  offset 104  — rendered-quad size
-  _pad1: vec4<f32>,          // 16 bytes, offset 112  — pad to 128
+  dither: vec4<f32>,         // 16 bytes, offset 112  — .x = output-dither code (§9.4), rest pad
 }
 @group(0) @binding(0) var<uniform> u: ShadowUniforms;
+${DITHER_WGSL}
 
 struct VsOut {
   @builtin(position) position: vec4<f32>,
@@ -99,7 +133,7 @@ fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
   // ~0.5 at the edge, ~0 at +blur past the edge.
   let alpha = 1.0 - smoothstep(-u.blur, u.blur, dist);
   if (alpha < 0.001) { discard; }
-  return u.color * alpha;
+  return ckDither(u.color * alpha, in.position.xy, u.dither.x);
 }
 `;
 
@@ -413,7 +447,7 @@ struct GradientUniforms {
   transform: mat4x4<f32>,           // offset 0,   size 64
   flags: vec4<f32>,                  // offset 64,  size 16  — cornerRadius (PIXELS), shapeType, fillType, numStops ("meta" is a reserved WGSL keyword)
   params: vec4<f32>,                 // offset 80,  size 16  — linear:(cos,sin,_,_) | radial:(cx,cy,radius,_)
-  size: vec4<f32>,                   // offset 96,  size 16  — (width_px, height_px, _, _)
+  size: vec4<f32>,                   // offset 96,  size 16  — (width_px, height_px, ditherCode §9.4, _)
   stop0: vec4<f32>,                  // offset 112, size 16
   stop1: vec4<f32>,                  // offset 128, size 16
   stop2: vec4<f32>,                  // offset 144, size 16
@@ -421,6 +455,7 @@ struct GradientUniforms {
   stopOffsets: vec4<f32>,            // offset 176, size 16
 }                                    // total: 192 bytes
 @group(0) @binding(0) var<uniform> u: GradientUniforms;
+${DITHER_WGSL}
 
 struct VsOut {
   @builtin(position) position: vec4<f32>,
@@ -492,7 +527,7 @@ fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
     color = u.stop3;
   }
 
-  return color;
+  return ckDither(color, in.position.xy, u.size.z);
 }
 `;
 
@@ -548,6 +583,78 @@ fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
     if (maskAlpha < 0.001) { discard; }
   }
   return sample * u.tint * maskAlpha;
+}
+`;
+
+// Gradient-tinted textured quad (mirror of GRADIENT_TEXTURED_FS in the WebGL
+// backend) — a glyph coverage quad whose color is a gradient sampled at the
+// glyph's LAYOUT position (grad), so pixel-true gradient text composes with
+// per-unit kinetic animation.
+const GRAD_TEXTURED_SHADER = /* wgsl */ `
+struct GradTexturedUniforms {
+  transform: mat4x4<f32>,       // offset 0
+  uvRect: vec4<f32>,            // offset 64  — atlas (u0,v0,u1,v1)
+  gradUV: vec4<f32>,            // offset 80  — gradient-space rect = glyph layout box
+  gmeta: vec4<f32>,             // offset 96  — (kind, nStops, opacity, alphaGamma)
+  gparams: vec4<f32>,           // offset 112 — linear:(dx,dy,_,ditherCode) radial:(cx,cy,r,ditherCode) conic:(cx,cy,rotTurns,ditherCode) — .w = output-dither code §9.4
+  stops: array<vec4<f32>, 8>,   // offset 128 — premultiplied stop colors
+  offsets0: vec4<f32>,          // offset 256 — stop offsets 0..3
+  offsets1: vec4<f32>,          // offset 272 — stop offsets 4..7
+}
+@group(0) @binding(0) var<uniform> u: GradTexturedUniforms;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var tex: texture_2d<f32>;
+
+struct VsOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+  @location(1) grad: vec2<f32>,
+}
+@vertex
+fn vsMain(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>) -> VsOut {
+  var out: VsOut;
+  out.position = u.transform * vec4<f32>(pos, 0.0, 1.0);
+  out.uv = mix(u.uvRect.xy, u.uvRect.zw, uv);
+  out.grad = mix(u.gradUV.xy, u.gradUV.zw, uv);
+  return out;
+}
+${DITHER_WGSL}
+fn offAt(i: i32) -> f32 {
+  let v = select(u.offsets0, u.offsets1, i >= 4);
+  let c = i % 4;
+  return select(select(select(v.x, v.y, c == 1), v.z, c == 2), v.w, c == 3);
+}
+@fragment
+fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
+  var sample = textureSample(tex, samp, in.uv);
+  let ag = u.gmeta.w;
+  if (ag != 1.0) { sample = sample * pow(max(sample.a, 1e-5), ag - 1.0); }
+  let kind = i32(u.gmeta.x + 0.5);
+  let nStops = i32(u.gmeta.y + 0.5);
+  var t: f32;
+  if (kind == 1) {
+    let radius = max(u.gparams.z, 1e-4);
+    t = clamp(distance(in.grad, u.gparams.xy) / radius, 0.0, 1.0);
+  } else if (kind == 2) {
+    let d = in.grad - u.gparams.xy;
+    let a = atan2(d.y, d.x) / 6.28318530718 + 0.5;
+    t = fract(a - u.gparams.z);
+  } else {
+    t = clamp(dot(in.grad - vec2<f32>(0.5, 0.5), u.gparams.xy) + 0.5, 0.0, 1.0);
+  }
+  var g = u.stops[0];
+  for (var i = 0; i < 7; i = i + 1) {
+    if (i >= nStops - 1) { break; }
+    let o0 = offAt(i);
+    let o1 = offAt(i + 1);
+    if (t >= o0 && t <= o1) {
+      let segT = (t - o0) / max(o1 - o0, 1e-4);
+      g = mix(u.stops[i], u.stops[i + 1], segT);
+      break;
+    }
+  }
+  if (t >= offAt(nStops - 1)) { g = u.stops[nStops - 1]; }
+  return ckDither(sample * g * u.gmeta.z, in.position.xy, u.gparams.w);
 }
 `;
 
@@ -663,18 +770,59 @@ fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
 }
 `;
 
+// Backdrop blur (§4.7 `backdrop_blur`) — frosted panel. Element layer
+// premultiplied OVER the pre-blurred backdrop, masked to the element
+// silhouette (coverage = s.a). Must match WebGL BACKDROP_BLUR_FS.
+const BACKDROP_BLUR_SHADER = /* wgsl */ `
+struct BBlurUniforms {
+  transform: mat4x4<f32>,   // 64 bytes
+  backdropFlipY: f32,       // [16]
+  _pad: vec3<f32>,          // pad to 80
+}
+@group(0) @binding(0) var<uniform> u: BBlurUniforms;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var srcTex: texture_2d<f32>;
+@group(0) @binding(3) var backdropTex: texture_2d<f32>;
+
+struct VsOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vsMain(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>) -> VsOut {
+  var out: VsOut;
+  out.position = u.transform * vec4<f32>(pos, 0.0, 1.0);
+  out.uv = uv;
+  return out;
+}
+
+@fragment
+fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
+  let s = textureSample(srcTex, samp, in.uv);
+  let buv = vec2<f32>(in.uv.x, select(in.uv.y, 1.0 - in.uv.y, u.backdropFlipY > 0.5));
+  let b = textureSample(backdropTex, samp, buv);
+  // Footprint = full coverage wherever the element is present (no sharp
+  // bleed inside the panel); element alpha tints the blurred backdrop.
+  let m = smoothstep(0.0, 0.04, s.a);
+  let over = s.rgb + b.rgb * (1.0 - s.a);  // element over blurred bg (premult)
+  return vec4<f32>(over * m, m);
+}
+`;
+
 const FILTERED_SHADER = /* wgsl */ `
 struct FilteredUniforms {
   transform: mat4x4<f32>,   // 64 bytes, offset 0
   tint: vec4<f32>,          // 16 bytes, offset 64 — premultiplied
   texel: vec2<f32>,         //  8 bytes, offset 80 — blur dir ÷ tex physical dims
   sigma: f32,               //  4 bytes, offset 88 — Gaussian σ in PHYSICAL px; 0 = off
-  _pad0: f32,               //  4 bytes, offset 92
+  dither: f32,              //  4 bytes, offset 92 — output-dither code (§9.4)
   colorOps: vec4<f32>,      // 16 bytes, offset 96 — (brightness, contrast, saturation, hue radians)
 }                           // total: 112, buffer rounded to 128
 @group(0) @binding(0) var<uniform> u: FilteredUniforms;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var tex: texture_2d<f32>;
+${DITHER_WGSL}
 
 struct VsOut {
   @builtin(position) position: vec4<f32>,
@@ -721,7 +869,7 @@ fn fsMain(in: VsOut) -> @location(0) vec4<f32> {
     ) * c;
   }
   c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
-  return vec4<f32>(c * a, a) * u.tint;
+  return ckDither(vec4<f32>(c * a, a) * u.tint, in.position.xy, u.dither);
 }
 `;
 
@@ -1256,11 +1404,16 @@ export class WebGPUBackend implements Backend {
   private shadowPipeline!: GPURenderPipeline;
   private gradientPipeline!: GPURenderPipeline;
   private texturedPipeline!: GPURenderPipeline;
+  private gradTexturedPipeline!: GPURenderPipeline;
   private maskedPipeline!: GPURenderPipeline;
   private filteredPipeline!: GPURenderPipeline;
   private stylizedPipeline!: GPURenderPipeline;
   private glassPipeline!: GPURenderPipeline;
   private backdropBlendPipeline!: GPURenderPipeline;
+  private backdropBlurPipeline!: GPURenderPipeline;
+  // Pixel-Expr pipelines compiled lazily, cached by full WGSL source (one per
+  // unique pixel_shader). null = a source that failed to build.
+  private pixelPipelines = new Map<string, GPURenderPipeline | null>();
   // Lazy projective variant (CKP/1.0 glass under 3D) — created on
   // first use so 2D documents never pay for it.
   private glass3dPipeline: GPURenderPipeline | null = null;
@@ -1276,6 +1429,7 @@ export class WebGPUBackend implements Backend {
   private gradientBindGroupLayout!: GPUBindGroupLayout;
   private texturedBindGroupLayout!: GPUBindGroupLayout;
   private maskedBindGroupLayout!: GPUBindGroupLayout;
+  private pixelShaderBindGroupLayout!: GPUBindGroupLayout;
 
   // Per-frame command recording state.
   private commandEncoder: GPUCommandEncoder | null = null;
@@ -1311,6 +1465,13 @@ export class WebGPUBackend implements Backend {
   // (96 B) write the first 96 bytes only; remainder is unused.
   private uniformBufferPool: GPUBuffer[] = [];
   private uniformBufferIndex = 0;
+  /**
+   * Anti-banding output dither (§9.4). Packs amplitude (magnitude, LSB)
+   * and pattern (sign), default ON (+1 LSB Bayer). Written into a spare
+   * uniform lane by the smooth-ramp draws (gradient, gradient-text,
+   * drop-shadow, blur/grade). Mirrors the WebGL backend's `ditherCode`.
+   */
+  private ditherCode = 1;
   private uniformScratch = new Float32Array(136); // 544 bytes (lit pass is the largest, 528 used)
   // Sized for the largest uniform struct (glass3d: 272 bytes, padded).
   private static readonly UNIFORM_SIZE = 544;
@@ -1564,6 +1725,12 @@ export class WebGPUBackend implements Backend {
 
     this.texturedPipeline = this.makeBlendablePipeline('textured', module, this.texturedBindGroupLayout);
 
+    // Gradient-tinted glyph variant — same bind-group shape (uniform + sampler +
+    // texture), larger uniform struct (no minBindingSize on the layout).
+    const gradTexModule = this.device.createShaderModule({ code: GRAD_TEXTURED_SHADER, label: 'gradTextured' });
+    await this.checkShaderCompilation(gradTexModule, 'gradTextured');
+    this.gradTexturedPipeline = this.makeBlendablePipeline('gradTextured', gradTexModule, this.texturedBindGroupLayout);
+
     // Lit textured variant (§4.8) — same bind-group shape (uniform +
     // sampler + texture), larger uniform struct. Lit images / video /
     // group cards.
@@ -1597,6 +1764,23 @@ export class WebGPUBackend implements Backend {
 
     this.maskedPipeline = this.makeBlendablePipeline('masked', maskedModule, this.maskedBindGroupLayout);
 
+    // pixel_shader: masked layout (uniform/sampler/src/backdrop) + 4 fixed image
+    // slots for texture(name, uv). One layout for every program; slots a program
+    // doesn't sample bind the layer (harmless), so the count stays fixed.
+    this.pixelShaderBindGroupLayout = this.device.createBindGroupLayout({
+      label: 'pixelShader bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
+    });
+
     // Filtered composite — same bind-group shape as the textured
     // pipeline (uniform + sampler + one texture), so the layout is
     // shared rather than duplicated.
@@ -1622,6 +1806,10 @@ export class WebGPUBackend implements Backend {
     const bbModule = this.device.createShaderModule({ code: BACKDROP_BLEND_SHADER, label: 'backdropBlend' });
     await this.checkShaderCompilation(bbModule, 'backdropBlend');
     this.backdropBlendPipeline = this.makePipeline('backdropBlend', bbModule, this.maskedBindGroupLayout, REPLACE_BLEND);
+
+    const bblModule = this.device.createShaderModule({ code: BACKDROP_BLUR_SHADER, label: 'backdropBlur' });
+    await this.checkShaderCompilation(bblModule, 'backdropBlur');
+    this.backdropBlurPipeline = this.makeBlendablePipeline('backdropBlur', bblModule, this.maskedBindGroupLayout);
   }
 
   private async checkShaderCompilation(module: GPUShaderModule, label: string): Promise<void> {
@@ -1722,6 +1910,10 @@ export class WebGPUBackend implements Backend {
   }
 
   // ─── Frame lifecycle ──────────────────────────────────────────────────────
+
+  setOutputDither(code: number): void {
+    this.ditherCode = code;
+  }
 
   beginFrame(clearColor: RGBA = [0, 0, 0, 1]): void {
     if (this.passEncoder) {
@@ -1904,7 +2096,7 @@ export class WebGPUBackend implements Backend {
     data[25] = params.height;
     data[26] = quadW;
     data[27] = quadH;
-    data[28] = 0; data[29] = 0; data[30] = 0; data[31] = 0;
+    data[28] = this.ditherCode; data[29] = 0; data[30] = 0; data[31] = 0; // dither.x @ offset 112
 
     const buffer = this.acquireUniformBuffer();
     this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, 128);
@@ -2168,10 +2360,10 @@ export class WebGPUBackend implements Backend {
       data[23] = 0;
     }
 
-    // size @ floats 24..27
+    // size @ floats 24..27 — .z carries the output-dither code (§9.4)
     data[24] = params.width;
     data[25] = params.height;
-    data[26] = 0;
+    data[26] = this.ditherCode;
     data[27] = 0;
 
     // Stop colors @ offsets 28..43 (4 floats each, 4 stops).
@@ -2207,6 +2399,10 @@ export class WebGPUBackend implements Backend {
     if (!this.passEncoder) return;
     if (params.lit) {
       this.drawLitTexturedQuad(params);
+      return;
+    }
+    if (params.gradientTint) {
+      this.drawGradientTexturedQuad(params);
       return;
     }
     const surfaceC = this.currentSurface();
@@ -2253,6 +2449,48 @@ export class WebGPUBackend implements Backend {
     this.passEncoder.setPipeline(this.pipelineFor(this.texturedPipeline, 'textured', params.blend));
     this.passEncoder.setBindGroup(0, bindGroup);
     this.passEncoder.draw(6, 1, 0, 0);
+  }
+
+  private drawGradientTexturedQuad(params: TexturedQuadDrawParams): void {
+    const g = params.gradientTint!;
+    const surface = this.currentSurface();
+    const transform = params.transform
+      ? projectPixelMatrix(params.transform, surface.width, surface.height, false)
+      : composeQuadTransform(
+        params.cx, params.cy, params.width, params.height, params.rotation, surface.width, surface.height, params.skewX ?? 0, params.skewY ?? 0,
+      );
+    const uvRect = params.uvRect ?? [0, 0, 1, 1];
+    const n = Math.max(2, Math.min(8, g.stops.length));
+    // 288-byte layout matching GradTexturedUniforms.
+    const data = this.uniformScratch;
+    data.set(transform, 0);
+    data.set(uvRect, 16);
+    data.set(g.gradUV, 20);
+    data[24] = g.kind;
+    data[25] = n;
+    data[26] = Math.max(0, Math.min(1, g.opacity));
+    data[27] = params.alphaGamma ?? 1;
+    data.set(g.params, 28);
+    data[31] = this.ditherCode; // gparams.w — unused by every gradient kind; carries the dither code (§9.4)
+    for (let i = 0; i < 8; i++) {
+      const c = i < n ? g.stops[i]! : ([0, 0, 0, 0] as const);
+      data[32 + i * 4] = c[0]; data[32 + i * 4 + 1] = c[1]; data[32 + i * 4 + 2] = c[2]; data[32 + i * 4 + 3] = c[3];
+    }
+    for (let i = 0; i < 8; i++) data[64 + i] = i < n ? (g.offsets[i] ?? 0) : (g.offsets[n - 1] ?? 0);
+    const buffer = this.acquireUniformBuffer();
+    this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, 288);
+    const tex = params.texture as WebGPUTexture;
+    const bindGroup = this.device.createBindGroup({
+      layout: this.texturedBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer } },
+        { binding: 1, resource: this.sampler },
+        { binding: 2, resource: tex.view },
+      ],
+    });
+    this.passEncoder!.setPipeline(this.pipelineFor(this.gradTexturedPipeline, 'gradTextured', params.blend));
+    this.passEncoder!.setBindGroup(0, bindGroup);
+    this.passEncoder!.draw(6, 1, 0, 0);
   }
 
   drawMaskedQuad(params: MaskedQuadDrawParams): void {
@@ -2337,6 +2575,88 @@ export class WebGPUBackend implements Backend {
     this.passEncoder.draw(6, 1, 0, 0);
   }
 
+  drawBackdropBlurQuad(params: BackdropBlurQuadDrawParams): void {
+    if (!this.passEncoder) return;
+    const surface = this.currentSurface();
+    const transform = composeQuadTransform(
+      params.cx, params.cy, params.width, params.height, 0, surface.width, surface.height,
+    );
+    // 80-byte BBlurUniforms: transform[0..15], backdropFlipY[16], pad[17..19].
+    const data = this.uniformScratch;
+    data.set(transform, 0);
+    data[16] = params.backdropFlipY ? 1 : 0;
+    data[17] = 0; data[18] = 0; data[19] = 0;
+
+    const buffer = this.acquireUniformBuffer();
+    this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, 80);
+
+    const layer = params.layer as WebGPUTexture;
+    const backdrop = params.backdrop as WebGPUTexture;
+    const bindGroup = this.device.createBindGroup({
+      layout: this.maskedBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer } },
+        { binding: 1, resource: this.sampler },
+        { binding: 2, resource: layer.view },
+        { binding: 3, resource: backdrop.view },
+      ],
+    });
+
+    this.passEncoder.setPipeline(this.pipelineFor(this.backdropBlurPipeline, 'backdropBlur', params.blend));
+    this.passEncoder.setBindGroup(0, bindGroup);
+    this.passEncoder.draw(6, 1, 0, 0);
+  }
+
+  drawPixelShaderQuad(params: PixelShaderQuadDrawParams): void {
+    if (!this.passEncoder) return;
+    let pipeline = this.pixelPipelines.get(params.wgslSource);
+    if (pipeline === undefined) {
+      try {
+        const module = this.device.createShaderModule({ code: params.wgslSource, label: 'pixelShader' });
+        pipeline = this.makePipeline('pixelShader', module, this.pixelShaderBindGroupLayout, PREMUL_BLEND);
+      } catch (e) {
+        getLogger().warn(`pixel_shader failed to build — element shown unstyled: ${e instanceof Error ? e.message : String(e)}`);
+        pipeline = null;
+      }
+      this.pixelPipelines.set(params.wgslSource, pipeline);
+    }
+    if (!pipeline) {
+      this.drawTexturedQuad({ cx: params.cx, cy: params.cy, width: params.width, height: params.height, rotation: 0, texture: params.layer, blend: params.blend });
+      return;
+    }
+    const surface = this.currentSurface();
+    const transform = composeQuadTransform(params.cx, params.cy, params.width, params.height, 0, surface.width, surface.height);
+    // 80-byte PixelUniforms: transform[0..15], resolution[16..17], time[18], pad[19].
+    const data = this.uniformScratch;
+    data.set(transform, 0);
+    data[16] = surface.width; data[17] = surface.height;
+    data[18] = params.time; data[19] = params.backdropFlipY ? 1 : 0;
+    for (let i = 0; i < 16; i++) data[20 + i] = params.params[i] ?? 0;
+    const buffer = this.acquireUniformBuffer();
+    this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, 144);
+
+    const layer = params.layer as WebGPUTexture;
+    const backdrop = params.backdrop as WebGPUTexture;
+    const tex = params.textures ?? [];
+    const texView = (k: number): GPUTextureView => ((tex[k] as WebGPUTexture | undefined) ?? layer).view;
+    const bindGroup = this.device.createBindGroup({
+      layout: this.pixelShaderBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer } },
+        { binding: 1, resource: this.sampler },
+        { binding: 2, resource: layer.view },
+        { binding: 3, resource: backdrop.view },
+        { binding: 4, resource: texView(0) },
+        { binding: 5, resource: texView(1) },
+        { binding: 6, resource: texView(2) },
+        { binding: 7, resource: texView(3) },
+      ],
+    });
+    this.passEncoder.setPipeline(pipeline);
+    this.passEncoder.setBindGroup(0, bindGroup);
+    this.passEncoder.draw(6, 1, 0, 0);
+  }
+
   drawFilteredQuad(params: FilteredQuadDrawParams): void {
     if (!this.passEncoder) return;
     const surface = this.currentSurface();
@@ -2362,7 +2682,7 @@ export class WebGPUBackend implements Backend {
     data[20] = params.blurDir[0] / t.width;
     data[21] = params.blurDir[1] / t.height;
     data[22] = sigma;
-    data[23] = 0;
+    data[23] = this.ditherCode; // dither @ offset 92 (§9.4)
     data[24] = params.brightness;
     data[25] = params.contrast;
     data[26] = params.saturation;

@@ -109,7 +109,7 @@ export function resolveEnvironment(source: Source, _time: number): ResolvedEnvir
     .slice(0, 4)
     .map((s) => {
       const c = parseColor(s.color);
-      return { offset: Math.max(0, Math.min(1, s.offset)), color: [c[0], c[1], c[2]] as [number, number, number] };
+      return { offset: Math.max(0, Math.min(1, typeof s.offset === 'number' ? s.offset : 0)), color: [c[0], c[1], c[2]] as [number, number, number] };
     })
     .sort((a, b) => a.offset - b.offset);
   const avg: [number, number, number] = [0, 0, 0];

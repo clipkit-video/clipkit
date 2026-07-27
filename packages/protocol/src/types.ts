@@ -241,8 +241,22 @@ export interface Animation {
   direction?: 'left' | 'right' | 'up' | 'down';
   /** Squash depth in [0, 1] (squash) or scale amplitude (breathe, default 0.05). */
   scale?: number;
-  /** Lattice seed for `drift`'s normative noise (integer ≥ 0). Default 0. */
+  /** Lattice seed for `drift`'s normative noise (integer ≥ 0). Default 0. Also seeds `order: 'random'` for text-* presets. */
   seed?: number;
+  /**
+   * Reveal order across split units for text-* entrance presets. `forward`
+   * (default) staggers in reading order (unit 0 first); `reverse` from the
+   * last unit; `random` deterministically shuffles the stagger slots by
+   * `seed` (After Effects "Randomize Order"). Ignored on non-text animations.
+   */
+  order?: 'forward' | 'reverse' | 'random';
+  /**
+   * Whether text-* entrance presets fade opacity 0→1 as each unit animates
+   * in (default true). Set false for a position/transform-only entrance —
+   * solid units that slide/scale into place without fading (After Effects
+   * animators that drive Position only). Ignored on non-text animations.
+   */
+  fade?: boolean;
 }
 
 export interface KeyframeAnimation {
@@ -386,6 +400,64 @@ export interface GlassEffect {
    * half-sphere magnifier).
    */
   mode?: 'pill' | 'dome';
+}
+
+/**
+ * Backdrop blur ("frosted panel") — the second effect that READS the
+ * backdrop (everything drawn beneath this element in paint order, §4.2).
+ * Within the element's own silhouette the backdrop is Gaussian-blurred
+ * and the element is painted over it (`out = mix(blurredBackdrop, element, α)`),
+ * shown at full coverage inside the footprint so the sharp backdrop does
+ * not bleed through. CSS `backdrop-filter: blur()` semantics: a
+ * translucent panel reads as mostly-blur, an opaque one as mostly-tint.
+ * Works on any element type.
+ * Like `glass`, the relationship is one-way: it reads what is beneath it
+ * but never alters how any other element renders.
+ */
+export interface BackdropBlurEffect {
+  type: 'backdrop_blur';
+  /** Backdrop Gaussian blur σ in canvas px. Default 12. Animatable. */
+  radius?: number | Keyframe[] | Expr;
+}
+
+/**
+ * Pixel-Expr shader — author per-pixel color in the `Expr` language (the
+ * same vocabulary as procedural animation, extended with vectors,
+ * swizzles, and the inputs `uv` (vec2 0..1), `t` (element-local seconds),
+ * `resolution`, `aspect`). The program is ONE expression evaluated per
+ * pixel to a color, compiled to GLSL ES 3.0 AND WGSL — never raw shaders;
+ * the closed grammar + fixed stdlib keep it deterministic and portable.
+ * Output promotes to a color: float → grayscale, vec3 → rgb (α=1),
+ * vec4 → rgba. The program fills the element's footprint (masked to its
+ * alpha), so a frame-filling shape gives a full-frame generative layer.
+ */
+export interface PixelShaderEffect {
+  type: 'pixel_shader';
+  /** Pixel-Expr program: one expression → a color, e.g. "mix(rgb(.02,.06,.16), rgb(.7,.87,.93), noise(uv*8.0 + vec2(t*.1, 0.0)))". */
+  source: string;
+  /**
+   * Sample the backdrop (the composited scene beneath this element, §4.7)
+   * inside the program via `backdrop(uv2)` → vec4 — for refraction,
+   * chromatic aberration, ripple, heat-haze, etc. Off by default; when
+   * true the runtime snapshots the backdrop and `backdrop()` becomes
+   * available (calling it without this set is a compile error). Default false.
+   */
+  reads_backdrop?: boolean;
+  /**
+   * Named float knobs the program references by name (e.g. `intensity`,
+   * `warp`). Each is animatable — a number or keyframes — so a shader's inputs
+   * can be driven from the timeline (and animated on a beat). Up to 16.
+   * Reference one in `source` like any input: `... * intensity`.
+   */
+  params?: Record<string, number | Keyframe[]>;
+  /**
+   * Image inputs the program samples, as `{ name: url }`. Read one in `source`
+   * with `texture(name, uv)` → vec4 (rgba, the bound sampler is linear /
+   * clamp-to-edge) — for image distortion, MSDF wordmarks (decode with
+   * `median(s.r, s.g, s.b)`), data textures, gradient ramps, etc. The URL is
+   * preloaded like any image asset. Up to 4 textures.
+   */
+  textures?: Record<string, string>;
 }
 
 /**
@@ -554,6 +626,8 @@ export type Effect =
   | HalftoneEffect
   | AsciiEffect
   | GlassEffect
+  | BackdropBlurEffect
+  | PixelShaderEffect
   | GlowEffect
   | DropShadowEffect
   | StrokeEffect
@@ -585,6 +659,44 @@ export interface BaseElement {
   duration?: number | string | 'auto' | 'end';
   /** When false, the element is not rendered at all. Default true. */
   visible?: boolean;
+
+  /**
+   * Generated set (§3.7): render N identical copies of this element
+   * (2..500). Per copy: expressions on the element's animatable
+   * properties see `i` = copy index (0-based) and `n` = the copy count;
+   * copy k starts `repeat_stagger * k` seconds after the element's own
+   * start; the literal placeholders `{i}` (0-based) / `{i1}` (1-based)
+   * inside `text` / `source` strings are substituted. Copies share the
+   * element's layer and draw in `i` order; a group's children inherit
+   * the copy's scope. Image, text, shape and group elements only
+   * (schema-enforced). For per-copy data, use `repeat_data` instead.
+   */
+  repeat?: number;
+  /**
+   * Generated set with one copy per row (§3.7). A row is a partial
+   * element patch + a variable scope: row keys naming element fields
+   * (`time`, `duration`, `text`, `fill_color`, …) override that field
+   * for the copy; ALL row keys are also in scope for the copy and its
+   * descendants — as `{key}` inside `text`/`source` strings and as bare
+   * identifiers in expressions (numeric values only). Mutually
+   * exclusive with `repeat` (the row count is the copy count).
+   * Structural keys and expression-reserved names are rejected as row
+   * keys. Image, text, shape and group elements only.
+   */
+  repeat_data?: Array<Record<string, string | number>>;
+  /**
+   * Seconds between successive copies of a generated set: copy k starts
+   * at `time + k * repeat_stagger`. Requires `repeat`/`repeat_data` and
+   * a numeric `time`; ignored for a copy whose row sets `time`
+   * explicitly. Default 0 (all copies start together).
+   */
+  repeat_stagger?: number;
+  /**
+   * Name of a Source-level `styles` bundle (§2.3) merged UNDER this
+   * element's own fields — defaults < style < element, no cascade.
+   * Appearance only. Image, text and shape elements only.
+   */
+  style?: string;
 
   // Transform
   x?: number | string | Keyframe[] | Expr;
@@ -921,8 +1033,21 @@ export interface TextElement extends BaseElement {
   font_weight?: number | string;
   font_style?: 'normal' | 'italic';
   fill_color?: string;
+  /**
+   * Gradient fill (overrides fill_color). Linear / radial / conic; the
+   * geometric params (angle / rotation / cx / cy / radius) are keyframeable
+   * and expressionable.
+   */
+  gradient?: LinearGradient | RadialGradient | ConicGradient;
   stroke_color?: string;
   stroke_width?: number;
+  /** Gradient stroke (overrides stroke_color); pair with stroke_width > 0. */
+  stroke_gradient?: LinearGradient | RadialGradient | ConicGradient;
+  /**
+   * Where the stroke sits relative to the glyph edge: 'outer' (default —
+   * outside the fill, so it never eats the letterform), 'center', or 'inner'.
+   */
+  stroke_align?: 'center' | 'outer' | 'inner';
   /**
    * Case transform applied before layout: 'uppercase', 'lowercase',
    * 'capitalize' (word-initial caps). Default 'none'.
@@ -1058,8 +1183,12 @@ export interface ShapeElement extends BaseElement {
 // ── Gradients (Clipkit extension) ─────────────────────────────────────────
 
 export interface GradientStop {
-  /** Position along the gradient in [0, 1]. */
-  offset: number;
+  /**
+   * Position along the gradient in [0, 1]. Keyframeable / expressionable —
+   * animate it to slide a color band (e.g. a white edge sweeping 0 → 1 for a
+   * wipe). Same `number | Keyframe[] | Expr` model as the gradient geometry.
+   */
+  offset: number | Keyframe[] | Expr;
   /** Hex color. */
   color: string;
 }
@@ -1070,20 +1199,39 @@ export interface LinearGradient {
    * Direction in degrees, following the CSS `linear-gradient()`
    * convention: 0° = to top, measured clockwise — 90° = to right,
    * 180° = to bottom, 270° = to left. Default 180 (to bottom).
+   * Keyframeable / expressionable (e.g. `{ expr: "t * 30" }` to rotate).
    */
-  angle?: number;
+  angle?: number | Keyframe[] | Expr;
   /** Color stops. Up to 4 are honored by the v1 runtime. */
   stops: GradientStop[];
 }
 
 export interface RadialGradient {
   type: 'radial';
-  /** Center X as a fraction of the shape's box. Default 0.5 (center). */
-  cx?: number;
-  /** Center Y as a fraction. Default 0.5. */
-  cy?: number;
-  /** Outer radius as a fraction of the shape's box. Default 0.5. */
-  radius?: number;
+  /** Center X as a fraction of the box. Default 0.5. Keyframeable / expressionable. */
+  cx?: number | Keyframe[] | Expr;
+  /** Center Y as a fraction. Default 0.5. Keyframeable / expressionable. */
+  cy?: number | Keyframe[] | Expr;
+  /** Outer radius as a fraction of the box. Default 0.5. Keyframeable / expressionable. */
+  radius?: number | Keyframe[] | Expr;
+  stops: GradientStop[];
+}
+
+/**
+ * Angular ("conic" / sweep) gradient — colors wrap around a center point.
+ * Text-only for now (rendered via Canvas2D; shapes use linear/radial). The
+ * `rotation` start-angle is keyframeable / expressionable, so
+ * `rotation: { expr: "t * 60" }` spins the sweep — e.g. a rainbow stroke
+ * rotating around a wordmark.
+ */
+export interface ConicGradient {
+  type: 'conic';
+  /** Sweep center X as a fraction of the box. Default 0.5. Keyframeable / expressionable. */
+  cx?: number | Keyframe[] | Expr;
+  /** Sweep center Y as a fraction. Default 0.5. Keyframeable / expressionable. */
+  cy?: number | Keyframe[] | Expr;
+  /** Start angle in degrees (clockwise from up). Default 0. Keyframeable / expressionable. */
+  rotation?: number | Keyframe[] | Expr;
   stops: GradientStop[];
 }
 
@@ -1568,6 +1716,26 @@ export type Environment =
       src: string;
     };
 
+/**
+ * A named appearance bundle (§2.3) — the `fonts` pattern generalized to
+ * field bundles. Referenced by an element's `style`; merged UNDER the
+ * element's own fields (defaults < style < element). One flat merge, no
+ * cascade, no inheritance. Appearance only: never identity, timing,
+ * layer or repetition.
+ */
+export interface Style {
+  font_family?: string;
+  font_weight?: string | number;
+  font_size?: number;
+  letter_spacing?: number;
+  fill_color?: string;
+  stroke_color?: string;
+  stroke_width?: number;
+  gradient?: LinearGradient | RadialGradient | ConicGradient;
+  border_radius?: number;
+  opacity?: number | Keyframe[] | Expr;
+}
+
 export interface Source {
   /**
    * The Clipkit Protocol version this Source conforms to. SHOULD be
@@ -1592,6 +1760,12 @@ export interface Source {
    * fonts itself.
    */
   fonts?: FontFace[];
+  /**
+   * Named appearance bundles (§2.3) that image/text/shape elements
+   * reference via `style`. Declare once, reference by name — the same
+   * pattern as `fonts`. Merge: defaults < style < element; no cascade.
+   */
+  styles?: Record<string, Style>;
   /**
    * Exact sub-frame supersampled motion blur, applied to the whole frame
    * at export/render time. See the MotionBlur type for the normative
@@ -1621,7 +1795,42 @@ export interface Source {
    * driven by its own brightness — these are the global "lens" knobs.
    */
   bloom?: Bloom;
+  /**
+   * Anti-banding output dither (§9.4). DEFAULT ON. A global, sub-LSB
+   * stipple the runtime adds as smooth float ramps are written to the
+   * 8-bit frame, so gradients, soft shadows, glows and blur falloffs cross
+   * 8-bit steps as fine texture instead of the hard diagonal bands 8-bit
+   * quantization otherwise produces. Deterministic (keyed to the pixel,
+   * no time term) so seeded renders stay reproducible and the grain never
+   * shimmers, and within the §9.1 ±1/255 tolerance. Set `false` (or
+   * `{ enabled: false }`) for byte-exact undithered output. Distinct from
+   * the retro `dither` EFFECT (§4.7), which is a 1-bit posterize look.
+   */
+  output_dither?: OutputDither;
   elements: Element[];
+}
+
+/**
+ * Anti-banding output dither (§9.4). Either a bare boolean (`true` = on
+ * with defaults, `false` = off) or an options object. Absence ⇒ ON.
+ */
+export type OutputDither = boolean | OutputDitherOptions;
+
+export interface OutputDitherOptions {
+  /** Master switch. Omitted ⇒ on; `false` disables (same as `output_dither: false`). */
+  enabled?: boolean;
+  /**
+   * Dither amplitude in 8-bit LSB units. Default 1 (≈±0.5 LSB — enough to
+   * dissolve banding, below the visible-noise threshold). 0 disables.
+   * Clamped to 0..8; above ~2 the grain starts to read as noise.
+   */
+  amplitude?: number;
+  /**
+   * Dither pattern. `"bayer"` (default) is an ordered 4×4 matrix — crisp,
+   * zero-cost, the safest default. `"noise"` is a static per-pixel
+   * triangular-PDF hash — finer and less structured, still deterministic.
+   */
+  pattern?: 'bayer' | 'noise';
 }
 
 /** Scene bloom parameters (§4.8). All animatable. */

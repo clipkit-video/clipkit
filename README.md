@@ -1,6 +1,6 @@
 # ClipKit
 
-**The video runtime for agents.** ClipKit turns a JSON timeline — the open
+**The video infra for agents.** ClipKit turns a JSON timeline — the open
 **ClipKit Protocol** — into rendered video on the GPU. Describe a video as
 structured data; get an MP4. Built for AI agents and the developers shipping them.
 

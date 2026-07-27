@@ -5,7 +5,6 @@
 // Input is always 16 kHz mono PCM (Float32). Output is a word-timestamped
 // transcript. Map it onto the protocol with `toCaptionWords` (caption.ts).
 
-import { pipeline as rawPipeline } from '@huggingface/transformers';
 import type { MonoAudio, TranscriptResult, TranscriptWord } from './types.js';
 
 // Transformers.js's `pipeline()` factory has a giant overload union that tsc
@@ -15,11 +14,31 @@ type AsrFn = (
   audio: Float32Array,
   opts: Record<string, unknown>,
 ) => Promise<{ text?: string; chunks?: Array<{ text: string; timestamp: [number, number | null] }> }>;
-const pipeline = rawPipeline as unknown as (
+type PipelineFactory = (
   task: 'automatic-speech-recognition',
   model: string,
   opts: Record<string, unknown>,
 ) => Promise<AsrFn>;
+
+// The ML engine (Transformers.js → onnxruntime, ~350 MB installed) is an
+// OPTIONAL peer so the package installs lean. It is loaded on first use;
+// absence fails here with an install hint, keeping every entry point
+// importable without it.
+let factory: Promise<PipelineFactory> | undefined;
+function loadPipelineFactory(): Promise<PipelineFactory> {
+  if (!factory) {
+    factory = import('@huggingface/transformers').then(
+      (m) => m.pipeline as unknown as PipelineFactory,
+      () => {
+        factory = undefined;
+        throw new Error(
+          'Local transcription needs the optional Whisper engine:\n\n  npm i @huggingface/transformers\n',
+        );
+      },
+    );
+  }
+  return factory;
+}
 
 /** Whisper variants — size/speed/accuracy trade-off. `.en` are English-only. */
 export type WhisperModel =
@@ -51,10 +70,13 @@ function getPipeline(model: string, quantized: boolean, onProgress?: TranscribeO
   const key = `${model}:${quantized}`;
   let p = pipelines.get(key);
   if (!p) {
-    p = pipeline('automatic-speech-recognition', model, {
-      dtype: quantized ? 'q8' : 'fp32',
-      progress_callback: onProgress,
-    });
+    p = loadPipelineFactory().then((pipeline) =>
+      pipeline('automatic-speech-recognition', model, {
+        dtype: quantized ? 'q8' : 'fp32',
+        progress_callback: onProgress,
+      }),
+    );
+    p.catch(() => pipelines.delete(key));
     pipelines.set(key, p);
   }
   return p;

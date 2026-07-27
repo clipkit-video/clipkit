@@ -267,6 +267,34 @@ export interface TexturedQuadDrawParams {
    * and flattened group-card layers. `alphaGamma` is ignored when lit.
    */
   lit?: LitParams;
+  /**
+   * Per-pixel gradient tint (glyph gradient fills, §5.2). When present it
+   * REPLACES `tint`: the quad samples the gradient at the per-pixel position
+   * interpolated from `gradUV`, so the color follows the glyph's LAYOUT box
+   * even as the quad animates to a different screen position. Pixel-true
+   * within every glyph. Backends without support fall back to `tint`.
+   */
+  gradientTint?: TexturedGradient;
+}
+
+/** A gradient sampled per-pixel to tint a textured (glyph) quad. */
+export interface TexturedGradient {
+  /** 0 = linear, 1 = radial, 2 = conic. */
+  kind: 0 | 1 | 2;
+  /** linear: (dirX, dirY, _, _) · radial: (cx, cy, radius, _) · conic: (cx, cy, rotTurns, _). */
+  params: readonly [number, number, number, number];
+  /** Premultiplied stop colors, 2..8. */
+  stops: readonly RGBA[];
+  /** Stop offsets in 0..1, same length as `stops`. */
+  offsets: readonly number[];
+  /**
+   * The quad's rect in gradient [0,1] space (u0, v0, u1, v1) — the glyph's
+   * NORMALIZED LAYOUT box (rest position in the text bounds), not its
+   * animated screen position.
+   */
+  gradUV: readonly [number, number, number, number];
+  /** Element/unit opacity 0..1 (the gradient replaces the premultiplied tint). */
+  opacity: number;
 }
 
 /**
@@ -397,6 +425,65 @@ export interface BackdropBlendDrawParams {
   height: number;
   /** copySurfaceTo may report the snapshot vertically flipped. */
   backdropFlipY?: boolean;
+}
+
+/**
+ * Backdrop blur (§4.7 `backdrop_blur`) — frosted panel. Composites the
+ * isolated element layer over a Gaussian-blurred copy of the backdrop
+ * snapshot, masked to the element's own silhouette (coverage = layer α),
+ * normal-blended so the sharp surface shows outside the silhouette. Both
+ * textures are full surface size and premultiplied; `backdrop` is
+ * pre-blurred by the caller. WebGL BACKDROP_BLUR_FS and WebGPU
+ * BACKDROP_BLUR_SHADER must match.
+ */
+export interface BackdropBlurQuadDrawParams {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  /** Isolated element layer, premultiplied, surface-sized. */
+  layer: Texture;
+  /** Pre-blurred backdrop snapshot, premultiplied, surface-sized. */
+  backdrop: Texture;
+  /** copySurfaceTo may report the snapshot vertically flipped. */
+  backdropFlipY?: boolean;
+  /** Blend against the destination. Default 'normal'. */
+  blend?: BlendMode;
+}
+
+/**
+ * Pixel-Expr shader (§4.7 `pixel_shader`) — run an author-supplied program
+ * (compiled to GLSL/WGSL by the Pixel-Expr compiler) over the element
+ * footprint. The backend compiles + caches the source by string, feeds
+ * `uTime`/`uResolution`, and the program output is masked to the element's
+ * alpha (`layer`). `glslSource`/`wgslSource` are FULL fragment shaders from
+ * buildGlslFragment/buildWgslFragment — the backend uses its own.
+ */
+export interface PixelShaderQuadDrawParams {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  /** Element layer (premultiplied) — its alpha masks the program output. */
+  layer: Texture;
+  /** Backdrop snapshot for `backdrop()`-reading programs. Bind the layer
+   *  itself (unused) when the program doesn't read the backdrop. */
+  backdrop: Texture;
+  /** copySurfaceTo may report the backdrop snapshot vertically flipped. */
+  backdropFlipY?: boolean;
+  /** Full GLSL ES 3.0 fragment source (WebGL backend). */
+  glslSource: string;
+  /** Full WGSL source (WebGPU backend). */
+  wgslSource: string;
+  /** Program clock in seconds (element-local time) → `uTime`. */
+  time: number;
+  /** Resolved param values this frame (≤16 floats), packed into `u_params`. */
+  params: number[];
+  /** Declared image inputs in slot order (≤4) for `texture(name, uv)`. Slots
+   *  the program doesn't sample are ignored; bind the layer there. */
+  textures?: Texture[];
+  /** Blend against the destination. Default 'normal'. */
+  blend?: BlendMode;
 }
 
 /** Stylize-effect modes — `element.effects` types (§4.7). */
@@ -586,6 +673,16 @@ export interface Backend {
   destroyTexture(texture: Texture): void;
 
   /**
+   * Set the anti-banding output dither for subsequent draws (§9.4).
+   * `code` packs amplitude (magnitude, in 8-bit LSB) and pattern (sign:
+   * + = ordered Bayer, − = static TPDF noise); 0 disables. The smooth-ramp
+   * shaders (gradient, gradient-text, drop-shadow, blur/grade) add a
+   * sub-LSB, pixel-keyed perturbation as they quantize to 8-bit so ramps
+   * don't band. Deterministic; persists until changed. Set once per frame.
+   */
+  setOutputDither(code: number): void;
+
+  /**
    * Start a frame. Clears the canvas to the given premultiplied color
    * (defaults to opaque black).
    */
@@ -614,6 +711,8 @@ export interface Backend {
 
   /** Composite an isolated layer with a piecewise blend mode (§4.5). */
   drawBackdropBlend(params: BackdropBlendDrawParams): void;
+  drawBackdropBlurQuad(params: BackdropBlurQuadDrawParams): void;
+  drawPixelShaderQuad(params: PixelShaderQuadDrawParams): void;
 
   /**
    * Copy the CURRENT surface's pixels into a render target of the same

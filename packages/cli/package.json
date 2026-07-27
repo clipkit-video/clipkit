@@ -1,9 +1,13 @@
 {
   "name": "@clipkit/cli",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Clipkit CLI — init, new, validate, explain, preview, render, still, docs, schema, mcp, login. The local-first onboarding surface.",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/cli" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clipkit-video/clipkit.git",
+    "directory": "packages/cli"
+  },
   "homepage": "https://clipkit.dev",
   "bugs": "https://github.com/clipkit-video/clipkit/issues",
   "type": "module",

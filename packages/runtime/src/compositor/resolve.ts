@@ -19,6 +19,7 @@ import {
 import { noise1d } from '../animation/noise1d.js';
 import { isExpr, evalExpr } from '../animation/expr.js';
 import { resolveMotionPath } from '../animation/motion-path.js';
+import { setScopeOf } from './repeat.js';
 import { compileAnimation } from '../animation/presets.js';
 import { applyEasing } from '../animation/easings.js';
 import { rgbaToCss } from './color.js';
@@ -86,7 +87,8 @@ function scalarAnimation(
   const raw = (element as Record<string, unknown>)[property]
     ?? (property === 'rotation' ? (element as { z_rotation?: unknown }).z_rotation : undefined);
   if (isExpr(raw)) {
-    return evalExpr(raw, { t: localTime, dur: elementDuration, i: 0, n: 1, value: staticValue });
+    const set = setScopeOf(element);
+    return evalExpr(raw, { t: localTime, dur: elementDuration, i: set.i, n: set.n, value: staticValue, vars: set.vars });
   }
 
   // 1. Keyframe animations override the static value. `z_rotation` is

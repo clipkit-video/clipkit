@@ -157,7 +157,7 @@ function resolvePaint(
     if (!g) return '#ffffff';
     const grad = ctx.createLinearGradient(g.x1, g.y1, g.x2, g.y2);
     for (const stop of g.stops) {
-      grad.addColorStop(clamp01(stop.offset), stop.color);
+      grad.addColorStop(clamp01(typeof stop.offset === 'number' ? stop.offset : 0), stop.color);
     }
     return grad;
   }

@@ -21,6 +21,7 @@ export { SERVER_INFO, SERVER_CAPABILITIES, SERVER_INSTRUCTIONS } from './server-
 export {
   type ProjectStore,
   type OpenProject,
+  type IngestAssetResult,
   openProject,
   InMemoryProjectStore,
 } from './project-store.js';

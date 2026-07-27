@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "dev.clipkit/clipkit",
+  "description": "MCP server for Clipkit — gives AI agents a video toolbox via the Clipkit schema.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/clipkit-video/clipkit",
+    "source": "github",
+    "subfolder": "packages/mcp-server"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://www.clipkit.dev/mcp"
+    }
+  ]
+}

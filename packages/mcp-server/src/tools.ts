@@ -328,12 +328,23 @@ const projectIdField = z
 export function registerTools(
   server: McpServer,
   store: ProjectStore,
-  options: { localTranscription?: boolean } = {},
+  options: { localTranscription?: boolean; cloudRender?: boolean } = {},
 ): void {
-  const { localTranscription = true } = options;
+  const { localTranscription = true, cloudRender = true } = options;
+
+  // Register a tool, mirroring its display `title` into `annotations.title`. Some
+  // MCP clients (Claude's connector inspector) lint for annotations.title
+  // specifically, so we set both from one source instead of repeating it per tool.
+  const reg: McpServer['registerTool'] = (name, config, cb) =>
+    server.registerTool(
+      name,
+      { ...config, annotations: { title: config.title, ...config.annotations } },
+      cb,
+    );
+
   // ─── read_docs ────────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'read_docs',
     {
       title: 'Read the Clipkit authoring docs',
@@ -356,7 +367,7 @@ export function registerTools(
 
   // ─── get_schema ───────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'get_schema',
     {
       title: 'Get the Clipkit JSON Schema (exact fields)',
@@ -386,7 +397,7 @@ export function registerTools(
 
   // ─── create_project ─────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'create_project',
     {
       title: 'Create a new Clipkit project',
@@ -414,6 +425,23 @@ export function registerTools(
           .optional()
           .describe('Output container/codec. Default "mp4".'),
         background_color: z.string().optional().describe('Hex color, e.g. "#000000".'),
+        output_dither: z
+          .union([
+            z.boolean(),
+            z
+              .object({
+                enabled: z.boolean().optional(),
+                amplitude: z.number().min(0).max(8).optional(),
+                pattern: z.enum(['bayer', 'noise']).optional(),
+              })
+              .passthrough(),
+          ])
+          .optional()
+          .describe(
+            'Anti-banding output dither — DEFAULT ON, leave unset. Pass false for byte-exact ' +
+            'undithered output, or { amplitude, pattern } to tune. Stops gradients / soft shadows / ' +
+            'blur from showing 8-bit banding; deterministic.',
+          ),
         project_id: projectIdField,
       },
     },
@@ -425,6 +453,7 @@ export function registerTools(
       if (args.frame_rate !== undefined) next.frame_rate = args.frame_rate;
       if (args.output_format !== undefined) next.output_format = args.output_format;
       if (args.background_color !== undefined) next.background_color = args.background_color;
+      if (args.output_dither !== undefined) next.output_dither = args.output_dither;
       const id = await store.put(args.project_id, next);
       return {
         content: [
@@ -447,7 +476,7 @@ export function registerTools(
 
   // ─── get_project ────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'get_project',
     {
       title: 'Get the current Clipkit project JSON',
@@ -472,7 +501,7 @@ export function registerTools(
 
   // ─── describe_project ─────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'describe_project',
     {
       title: 'Describe the current project in plain language',
@@ -509,7 +538,7 @@ export function registerTools(
 
   // ─── set_project ────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'set_project',
     {
       title: 'Replace the entire Clipkit project',
@@ -535,7 +564,7 @@ export function registerTools(
         '(optionally with an element_type) — the runtime ignores unrecognized keys, and this tool ' +
         'flags any it does not recognize.',
       inputSchema: {
-        source: z.unknown().describe('A full Clipkit source object (or JSON string).'),
+        source: z.record(z.unknown()).describe('A full Clipkit source object.'),
         project_id: projectIdField,
       },
     },
@@ -586,7 +615,7 @@ export function registerTools(
 
   // ─── add_element ────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'add_element',
     {
       title: 'Add an element to the current project',
@@ -606,7 +635,7 @@ export function registerTools(
         'whole before being added. Call get_schema(element_type) for the exact per-type fields; ' +
         'unrecognized keys are flagged.',
       inputSchema: {
-        element: z.unknown().describe('A Clipkit element object. Must include `type`.'),
+        element: z.record(z.unknown()).describe('A Clipkit element object. Must include `type`.'),
         parent_id: z
           .string()
           .min(1)
@@ -684,7 +713,7 @@ export function registerTools(
 
   // ─── edit_element ─────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'edit_element',
     {
       title: 'Tweak one existing element (merge changed fields)',
@@ -754,7 +783,7 @@ export function registerTools(
 
   // ─── delete_element ───────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'delete_element',
     {
       title: 'Delete one element by id',
@@ -813,7 +842,7 @@ export function registerTools(
 
   // ─── validate_project ─────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'validate_project',
     {
       title: 'Validate the current project (schema + render-time warnings)',
@@ -905,7 +934,7 @@ export function registerTools(
 
   // ─── preview_still ────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'preview_still',
     {
       title: 'Render one frame of the current project so you can SEE it',
@@ -975,7 +1004,7 @@ export function registerTools(
   // hosts that can't run it (the serverless /mcp route) pass
   // localTranscription:false and this tool isn't advertised there — see registerTools.
   if (localTranscription) {
-    server.registerTool(
+    reg(
       'transcribe_to_captions',
       {
         title: 'Transcribe speech into a word-timestamped caption element',
@@ -1071,7 +1100,7 @@ export function registerTools(
 
   // ─── create_promo ─────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'create_promo',
     {
       title: 'Compose a designed promo from prebuilt scenes (one fast option)',
@@ -1159,7 +1188,7 @@ export function registerTools(
 
   // ─── open_in_editor ───────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'open_in_editor',
     {
       title: 'Create a shareable link that opens the current project in the editor',
@@ -1200,9 +1229,64 @@ export function registerTools(
     },
   );
 
+  // ─── ingest_asset ───────────────────────────────────────────────────────────
+
+  // Gated on store capability: only a host that can fetch + store media (the
+  // Supabase store) implements ingestAsset, so it's advertised only there — never
+  // on the in-memory stdio store.
+  if (store.ingestAsset) {
+    reg(
+      'ingest_asset',
+      {
+        title: 'Host a remote image/video/audio so a project can use it',
+        outputSchema: {
+          asset_url: z.string(),
+          asset_id: z.string(),
+          filename: z.string(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+        description:
+          'Fetch a remote media URL (image/video/audio) and HOST it on Clipkit, returning a stable ' +
+          "asset_url to put in an element's `url`. Use this so the project's media survives — the " +
+          'original link may rot, be private, or block hotlinking. Anonymous projects allow up to 5 ' +
+          'hosted assets / 100 MB total / 50 MB per file; when the limit is hit, tell the user to open ' +
+          'the project (open_in_editor) and sign in to add more. Requires project_id.',
+        inputSchema: {
+          url: z.string().url().describe('A public http(s) URL to an image, video, or audio file.'),
+          filename: z.string().optional().describe('Optional display name for the asset.'),
+          project_id: projectIdField,
+        },
+      },
+      async ({ url, filename, project_id }) => {
+        const id = project_id ?? (await store.currentId());
+        if (!id) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: 'No active project. Pass a project_id (create_project / set_project / create_promo / load_project return one).',
+              },
+            ],
+          };
+        }
+        const res = await store.ingestAsset!(id, url, filename);
+        if (!res.ok) {
+          return { isError: true, content: [{ type: 'text', text: res.error }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `Hosted "${res.filename}". Use this url in an element:\n${res.url}` },
+          ],
+          structuredContent: { asset_url: res.url, asset_id: res.asset_id, filename: res.filename },
+        };
+      },
+    );
+  }
+
   // ─── load_project ─────────────────────────────────────────────────────────
 
-  server.registerTool(
+  reg(
     'load_project',
     {
       title: 'Load a shared project back into the session',
@@ -1260,7 +1344,13 @@ export function registerTools(
 
   // ─── render_video ─────────────────────────────────────────────────────────
 
-  server.registerTool(
+  // Gated: the hosted /mcp connector is open/anonymous and would render on the
+  // SERVER's CLIPKIT_API_KEY (burning the operator's credits for a stranger), so
+  // it passes cloudRender:false and this tool isn't advertised there — anonymous
+  // users are steered to open_in_editor and render in the browser instead. The
+  // local stdio server keeps it (the user's own key, their own credits).
+  if (cloudRender) {
+  reg(
     'render_video',
     {
       title: 'Render the current project to an MP4 in the cloud',
@@ -1315,4 +1405,5 @@ export function registerTools(
       };
     },
   );
+  }
 }

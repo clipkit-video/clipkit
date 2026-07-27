@@ -51,6 +51,16 @@ export { ctaOutro, type CtaOutroProps } from './cta-outro.js';
 export { kineticHeadline, type KineticHeadlineProps } from './kinetic-headline.js';
 export { promo, type PromoOptions, type Scene, type SceneCtx } from './promo.js';
 
+// Text-echo / motion-trail patterns — the After Effects "Echo" family.
+export {
+  radioEcho, type RadioEchoProps,
+  echoTrail, type EchoTrailProps,
+  rgbSplit, type RgbSplitProps,
+  rainbowEcho, type RainbowEchoProps,
+  disperseStack, type DisperseStackProps,
+  wiggleJitter, type WiggleJitterProps,
+} from './echo.js';
+
 // Internal helper, exported so callers can use it directly when they
 // don't want a full StatBlock / BarChartRow.
 export { trendPill, trendPct, type TrendPillProps } from './trend-pill.js';

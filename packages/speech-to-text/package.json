@@ -1,6 +1,6 @@
 {
   "name": "@clipkit/speech-to-text",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Speech-to-text for Clipkit — transcribe an audio/video source into word-timestamped captions. Runs the same Whisper model (Transformers.js / ONNX) in the browser (WebGPU/WASM) and in Node (onnxruntime-node); no paid API, no native binaries. The output maps straight onto the protocol's `caption` element `words[]`. Authoring-time only: the runtime stays pure.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/speech-to-text" },
@@ -39,10 +39,18 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@clipkit/protocol": "^1.0.0",
+    "@clipkit/protocol": "^1.0.0"
+  },
+  "peerDependencies": {
     "@huggingface/transformers": "^3.0.0"
   },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@huggingface/transformers": "^3.0.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.3"
   }

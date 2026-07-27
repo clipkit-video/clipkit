@@ -131,6 +131,11 @@ export interface RenderContext {
   /** Global time in seconds. Used for animation evaluation. */
   time: number;
   /**
+   * The Source's named style bundles (§2.3), so group child walks can
+   * merge styles at any depth. Set once per frame by renderSourceFrame.
+   */
+  styles?: Record<string, Record<string, unknown>>;
+  /**
    * Total duration of the current source in seconds. Used to resolve
    * `duration: "auto"` and `time: "end"` for elements and animations.
    */

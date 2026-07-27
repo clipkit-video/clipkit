@@ -49,7 +49,25 @@ export interface ProjectStore {
    * the caller persists a share via the API instead.
    */
   editorUrl?(projectId: string): Promise<string | null>;
+
+  /**
+   * Optional. Host-side asset ingestion: fetch a remote media URL server-side,
+   * store it, and return a public URL usable in an element's `url`. Only the
+   * hosted Supabase store implements this (the in-memory stdio store doesn't, so
+   * `ingest_asset` simply isn't advertised there). Project-scoped + subject to a
+   * per-project anonymous allowance; returns a structured limit result the tool
+   * relays so the agent can route the user to sign-in.
+   */
+  ingestAsset?(
+    projectId: string,
+    url: string,
+    filename?: string,
+  ): Promise<IngestAssetResult>;
 }
+
+export type IngestAssetResult =
+  | { ok: true; url: string; asset_id: string; filename: string }
+  | { ok: false; error: string; reason?: string; used?: number; limit?: number };
 
 /** A loaded project plus a save() already bound to its id. */
 export interface OpenProject {

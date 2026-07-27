@@ -19,6 +19,8 @@ import type {
   Backend,
   BackendCapabilities,
   BackdropBlendDrawParams,
+  BackdropBlurQuadDrawParams,
+  PixelShaderQuadDrawParams,
   BlendMode,
   FilteredQuadDrawParams,
   GlassQuadDrawParams,
@@ -38,6 +40,37 @@ interface WebGLTexture_ extends Texture {
 }
 
 // ─── Shaders ────────────────────────────────────────────────────────────────
+
+// Anti-banding output dither (§9.4). A sub-LSB perturbation added at the
+// moment a smooth float ramp is written to the 8-bit target, so gradients,
+// soft shadows and blur falloffs cross 8-bit steps as a fine stipple
+// instead of hard diagonal bands. `u_dither` packs amplitude (magnitude,
+// in 8-bit LSB) and pattern (sign: + ordered Bayer, − static TPDF noise);
+// 0 disables. Keyed to gl_FragCoord (no time term) so renders stay
+// deterministic and the grain never shimmers. Mirrors DITHER_WGSL in the
+// WebGPU backend. Interpolated into every smooth-ramp fragment shader.
+const DITHER_GLSL = `
+uniform float u_dither;   // amplitude (magnitude, LSB) + pattern (sign); 0 = off
+float ckDitherOffset(vec2 fc) {
+  float amp = abs(u_dither);
+  if (amp <= 0.0) return 0.0;
+  float t;
+  if (u_dither < 0.0) {
+    // Static triangular-PDF value noise (two hashes), pixel-keyed.
+    float r1 = fract(sin(dot(fc, vec2(12.9898, 78.233))) * 43758.5453);
+    float r2 = fract(sin(dot(fc + vec2(0.5), vec2(12.9898, 78.233))) * 43758.5453);
+    t = (r1 + r2 - 1.0) * 0.5;             // (-0.5, 0.5)
+  } else {
+    // Ordered 4×4 Bayer threshold, normalized to (-0.5, 0.5).
+    ivec2 ip = ivec2(floor(fc));
+    float bayer[16] = float[16](0.,8.,2.,10., 12.,4.,14.,6., 3.,11.,1.,9., 15.,7.,13.,5.);
+    t = (bayer[(ip.y % 4) * 4 + (ip.x % 4)] + 0.5) / 16.0 - 0.5;
+  }
+  return t * (amp / 255.0);
+}
+// Premultiplied color in; dithered, clamped color out.
+vec4 ckDither(vec4 c, vec2 fc) { return clamp(c + ckDitherOffset(fc), 0.0, 1.0); }
+`;
 
 const SHAPE_VS = `#version 300 es
 in vec2 a_pos;
@@ -65,6 +98,7 @@ uniform float u_cornerRadius;  // PIXELS, of the SHAPE (not quad)
 uniform float u_shapeType;     // 0.0 rect, 1.0 ellipse
 uniform vec2 u_size;           // pixel (width, height) of the SHAPE
 uniform vec2 u_quadSize;       // pixel (width, height) of the rendered quad
+${DITHER_GLSL}
 void main() {
   // Pixel position in quad-local space. The shape sits centered, with
   // blur-sized margins on every side, so subtracting half the quad's
@@ -92,7 +126,7 @@ void main() {
   if (dist > u_blur) discard;
   float alpha = 1.0 - smoothstep(-u_blur, u_blur, dist);
   if (alpha < 0.001) discard;
-  fragColor = u_color * alpha;
+  fragColor = ckDither(u_color * alpha, gl_FragCoord.xy);
 }
 `;
 
@@ -401,7 +435,7 @@ uniform vec4 u_params;        // linear:(cos,sin,_,_) | radial:(cx,cy,radius,_)
 uniform vec2 u_size;          // pixel (width, height)
 uniform vec4 u_stops[4];      // 4 stop colors (premultiplied)
 uniform vec4 u_stopOffsets;   // 4 stop offsets
-
+${DITHER_GLSL}
 void main() {
   vec2 uv = v_uv;
   float cornerRadius = u_meta.x;
@@ -449,7 +483,7 @@ void main() {
     color = u_stops[nStops - 1];
   }
 
-  fragColor = color;
+  fragColor = ckDither(color, gl_FragCoord.xy);
 }
 `;
 
@@ -499,6 +533,67 @@ void main() {
     if (maskAlpha < 0.001) discard;
   }
   fragColor = s * u_tint * maskAlpha;
+}
+`;
+
+// Gradient-tinted textured quad — a glyph coverage quad whose color comes from
+// a gradient sampled at the glyph's LAYOUT position (v_grad), not its animated
+// screen position. Pixel-true gradient text that composes with per-unit kinetic
+// animation (the color follows each glyph as it flies in).
+const GRADIENT_TEXTURED_VS = `#version 300 es
+in vec2 a_pos;
+in vec2 a_uv;
+out vec2 v_uv;
+out vec2 v_grad;
+uniform mat4 u_transform;
+uniform vec4 u_uvRect;   // atlas sub-rect (u0,v0,u1,v1)
+uniform vec4 u_gradUV;   // gradient-space rect (u0,v0,u1,v1) = glyph's layout box
+void main() {
+  gl_Position = u_transform * vec4(a_pos, 0.0, 1.0);
+  v_uv = mix(u_uvRect.xy, u_uvRect.zw, a_uv);
+  v_grad = mix(u_gradUV.xy, u_gradUV.zw, a_uv);
+}
+`;
+
+const GRADIENT_TEXTURED_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec2 v_grad;
+out vec4 fragColor;
+uniform sampler2D u_tex;        // atlas coverage (premultiplied)
+uniform float u_alphaGamma;
+uniform vec4 u_gmeta;           // (kind, nStops, opacity, _)  kind 0 linear/1 radial/2 conic
+uniform vec4 u_gparams;         // linear:(dx,dy,_,_) radial:(cx,cy,radius,_) conic:(cx,cy,rotTurns,_)
+uniform vec4 u_gstops[8];       // premultiplied stop colors
+uniform float u_goffsets[8];    // stop offsets
+${DITHER_GLSL}
+void main() {
+  vec4 s = texture(u_tex, v_uv);
+  if (u_alphaGamma != 1.0) s *= pow(max(s.a, 1e-5), u_alphaGamma - 1.0);
+  int kind = int(u_gmeta.x + 0.5);
+  int nStops = int(u_gmeta.y + 0.5);
+  float t;
+  if (kind == 1) {
+    float radius = max(u_gparams.z, 1e-4);
+    t = clamp(distance(v_grad, u_gparams.xy) / radius, 0.0, 1.0);
+  } else if (kind == 2) {
+    vec2 d = v_grad - u_gparams.xy;
+    float a = atan(d.y, d.x) / 6.28318530718 + 0.5;
+    t = fract(a - u_gparams.z);
+  } else {
+    t = clamp(dot(v_grad - vec2(0.5), u_gparams.xy) + 0.5, 0.0, 1.0);
+  }
+  vec4 g = u_gstops[0];
+  for (int i = 0; i < 7; i++) {
+    if (i >= nStops - 1) break;
+    if (t >= u_goffsets[i] && t <= u_goffsets[i + 1]) {
+      float segT = (t - u_goffsets[i]) / max(u_goffsets[i + 1] - u_goffsets[i], 1e-4);
+      g = mix(u_gstops[i], u_gstops[i + 1], segT);
+      break;
+    }
+  }
+  if (t >= u_goffsets[nStops - 1]) g = u_gstops[nStops - 1];
+  fragColor = ckDither(s * g * u_gmeta.z, gl_FragCoord.xy);
 }
 `;
 
@@ -568,6 +663,30 @@ void main() {
 }
 `;
 
+// Backdrop blur (§4.7 `backdrop_blur`) — frosted panel. Element layer
+// premultiplied OVER the pre-blurred backdrop, then masked to the
+// element silhouette (coverage = s.a) so the sharp surface shows
+// outside it. Must match WebGPU BACKDROP_BLUR_SHADER exactly.
+const BACKDROP_BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 fragColor;
+uniform sampler2D u_src;        // element layer, premultiplied
+uniform sampler2D u_backdrop;   // pre-blurred backdrop, premultiplied
+uniform float u_backdropFlipY;  // 1.0 flips backdrop v
+void main() {
+  vec4 s = texture(u_src, v_uv);
+  vec2 buv = vec2(v_uv.x, mix(v_uv.y, 1.0 - v_uv.y, u_backdropFlipY));
+  vec4 b = texture(u_backdrop, buv);
+  // Footprint = full coverage wherever the element is present, so the
+  // sharp backdrop does NOT bleed through inside the panel; the element
+  // alpha only tints the fully-blurred backdrop (translucent = mostly blur).
+  float m = smoothstep(0.0, 0.04, s.a);
+  vec3 over = s.rgb + b.rgb * (1.0 - s.a);  // element over blurred bg (premult)
+  fragColor = vec4(over * m, m);
+}
+`;
+
 // Filter composite: a layer texture drawn 1:1 with an optional separable
 // Gaussian blur pass plus color ops. Shares TEXTURED_VS. 25 taps spread
 // over ±3σ; weights computed in-shader and normalized by their sum so
@@ -584,6 +703,7 @@ uniform vec2 u_texel;      // blur direction ÷ texture PHYSICAL dims
 uniform float u_sigma;     // Gaussian σ in PHYSICAL pixels; 0 = no blur
 uniform vec4 u_colorOps;   // (brightness, contrast, saturation, hue radians)
 uniform vec4 u_tint;       // premultiplied
+${DITHER_GLSL}
 void main() {
   vec4 acc;
   if (u_sigma > 0.0) {
@@ -615,7 +735,7 @@ void main() {
     ) * c;
   }
   c = clamp(c, 0.0, 1.0);
-  fragColor = vec4(c * a, a) * u_tint;
+  fragColor = ckDither(vec4(c * a, a) * u_tint, gl_FragCoord.xy);
 }
 `;
 
@@ -1140,6 +1260,7 @@ export class WebGL2Backend implements Backend {
     uShapeType: WebGLUniformLocation | null;
     uSize: WebGLUniformLocation | null;
     uQuadSize: WebGLUniformLocation | null;
+    uDither: WebGLUniformLocation | null;
   };
 
   private gradientProgram!: WebGLProgram;
@@ -1152,6 +1273,7 @@ export class WebGL2Backend implements Backend {
     uSize: WebGLUniformLocation | null;
     uStops: WebGLUniformLocation | null;
     uStopOffsets: WebGLUniformLocation | null;
+    uDither: WebGLUniformLocation | null;
   };
 
   private texturedProgram!: WebGLProgram;
@@ -1165,6 +1287,22 @@ export class WebGL2Backend implements Backend {
     uCornerRadius: WebGLUniformLocation | null;
     uSize: WebGLUniformLocation | null;
     uAlphaGamma: WebGLUniformLocation | null;
+  };
+
+  private gradTexturedProgram!: WebGLProgram;
+  private gradTexturedLocs!: {
+    aPos: number;
+    aUv: number;
+    uTransform: WebGLUniformLocation | null;
+    uUvRect: WebGLUniformLocation | null;
+    uGradUV: WebGLUniformLocation | null;
+    uTex: WebGLUniformLocation | null;
+    uAlphaGamma: WebGLUniformLocation | null;
+    uGmeta: WebGLUniformLocation | null;
+    uGparams: WebGLUniformLocation | null;
+    uGstops: WebGLUniformLocation | null;
+    uGoffsets: WebGLUniformLocation | null;
+    uDither: WebGLUniformLocation | null;
   };
 
   private maskedProgram!: WebGLProgram;
@@ -1191,6 +1329,34 @@ export class WebGL2Backend implements Backend {
     uBackdropFlipY: WebGLUniformLocation | null;
   };
 
+  private backdropBlurProgram!: WebGLProgram;
+  private backdropBlurLocs!: {
+    aPos: number;
+    aUv: number;
+    uTransform: WebGLUniformLocation | null;
+    uUvRect: WebGLUniformLocation | null;
+    uSrc: WebGLUniformLocation | null;
+    uBackdrop: WebGLUniformLocation | null;
+    uBackdropFlipY: WebGLUniformLocation | null;
+  };
+
+  // Pixel-Expr programs compiled lazily and cached by full GLSL source (one
+  // program per unique pixel_shader). null = a source that failed to compile
+  // (poisoned so we don't retry every frame).
+  private pixelPrograms = new Map<string, {
+    program: WebGLProgram;
+    aPos: number; aUv: number;
+    uTransform: WebGLUniformLocation | null;
+    uUvRect: WebGLUniformLocation | null;
+    uSrc: WebGLUniformLocation | null;
+    uBackdrop: WebGLUniformLocation | null;
+    uBackdropFlipY: WebGLUniformLocation | null;
+    uTime: WebGLUniformLocation | null;
+    uResolution: WebGLUniformLocation | null;
+    uParams: WebGLUniformLocation | null;
+    uTex: (WebGLUniformLocation | null)[];
+  } | null>();
+
   private filteredProgram!: WebGLProgram;
   private filteredLocs!: {
     aPos: number;
@@ -1202,6 +1368,7 @@ export class WebGL2Backend implements Backend {
     uSigma: WebGLUniformLocation | null;
     uColorOps: WebGLUniformLocation | null;
     uTint: WebGLUniformLocation | null;
+    uDither: WebGLUniformLocation | null;
   };
 
   private stylizedProgram!: WebGLProgram;
@@ -1244,6 +1411,13 @@ export class WebGL2Backend implements Backend {
   private liveTextures = new Set<WebGLTexture_>();
   private framingActive = false;
   private disposed = false;
+
+  /**
+   * Anti-banding output dither (§9.4). Packs amplitude (magnitude, LSB)
+   * and pattern (sign), default ON (+1 LSB Bayer). The smooth-ramp shaders
+   * read it via the `u_dither` uniform set in their draw calls.
+   */
+  private ditherCode = 1;
 
   /** Physical backing-store dims ÷ logical dims (renderResolution). */
   private pixelRatio = 1;
@@ -1340,6 +1514,7 @@ export class WebGL2Backend implements Backend {
         uShapeType: gl.getUniformLocation(this.shadowProgram, 'u_shapeType'),
         uSize: gl.getUniformLocation(this.shadowProgram, 'u_size'),
         uQuadSize: gl.getUniformLocation(this.shadowProgram, 'u_quadSize'),
+        uDither: gl.getUniformLocation(this.shadowProgram, 'u_dither'),
       };
 
       this.gradientProgram = this.buildProgram(GRADIENT_VS, GRADIENT_FS, 'gradient');
@@ -1352,6 +1527,7 @@ export class WebGL2Backend implements Backend {
         uSize: gl.getUniformLocation(this.gradientProgram, 'u_size'),
         uStops: gl.getUniformLocation(this.gradientProgram, 'u_stops'),
         uStopOffsets: gl.getUniformLocation(this.gradientProgram, 'u_stopOffsets'),
+        uDither: gl.getUniformLocation(this.gradientProgram, 'u_dither'),
       };
 
       this.texturedProgram = this.buildProgram(TEXTURED_VS, TEXTURED_FS, 'textured');
@@ -1365,6 +1541,22 @@ export class WebGL2Backend implements Backend {
         uCornerRadius: gl.getUniformLocation(this.texturedProgram, 'u_cornerRadius'),
         uSize: gl.getUniformLocation(this.texturedProgram, 'u_size'),
         uAlphaGamma: gl.getUniformLocation(this.texturedProgram, 'u_alphaGamma'),
+      };
+
+      this.gradTexturedProgram = this.buildProgram(GRADIENT_TEXTURED_VS, GRADIENT_TEXTURED_FS, 'grad-textured');
+      this.gradTexturedLocs = {
+        aPos: gl.getAttribLocation(this.gradTexturedProgram, 'a_pos'),
+        aUv: gl.getAttribLocation(this.gradTexturedProgram, 'a_uv'),
+        uTransform: gl.getUniformLocation(this.gradTexturedProgram, 'u_transform'),
+        uUvRect: gl.getUniformLocation(this.gradTexturedProgram, 'u_uvRect'),
+        uGradUV: gl.getUniformLocation(this.gradTexturedProgram, 'u_gradUV'),
+        uTex: gl.getUniformLocation(this.gradTexturedProgram, 'u_tex'),
+        uAlphaGamma: gl.getUniformLocation(this.gradTexturedProgram, 'u_alphaGamma'),
+        uGmeta: gl.getUniformLocation(this.gradTexturedProgram, 'u_gmeta'),
+        uGparams: gl.getUniformLocation(this.gradTexturedProgram, 'u_gparams'),
+        uGstops: gl.getUniformLocation(this.gradTexturedProgram, 'u_gstops'),
+        uGoffsets: gl.getUniformLocation(this.gradTexturedProgram, 'u_goffsets'),
+        uDither: gl.getUniformLocation(this.gradTexturedProgram, 'u_dither'),
       };
 
       this.maskedProgram = this.buildProgram(TEXTURED_VS, MASKED_FS, 'masked');
@@ -1390,6 +1582,7 @@ export class WebGL2Backend implements Backend {
         uSigma: gl.getUniformLocation(this.filteredProgram, 'u_sigma'),
         uColorOps: gl.getUniformLocation(this.filteredProgram, 'u_colorOps'),
         uTint: gl.getUniformLocation(this.filteredProgram, 'u_tint'),
+        uDither: gl.getUniformLocation(this.filteredProgram, 'u_dither'),
       };
 
       this.stylizedProgram = this.buildProgram(TEXTURED_VS, STYLIZED_FS, 'stylized');
@@ -1418,6 +1611,17 @@ export class WebGL2Backend implements Backend {
         uBackdrop: gl.getUniformLocation(this.backdropBlendProgram, 'u_backdrop'),
         uMode: gl.getUniformLocation(this.backdropBlendProgram, 'u_mode'),
         uBackdropFlipY: gl.getUniformLocation(this.backdropBlendProgram, 'u_backdropFlipY'),
+      };
+
+      this.backdropBlurProgram = this.buildProgram(TEXTURED_VS, BACKDROP_BLUR_FS, 'backdropBlur');
+      this.backdropBlurLocs = {
+        aPos: gl.getAttribLocation(this.backdropBlurProgram, 'a_pos'),
+        aUv: gl.getAttribLocation(this.backdropBlurProgram, 'a_uv'),
+        uTransform: gl.getUniformLocation(this.backdropBlurProgram, 'u_transform'),
+        uUvRect: gl.getUniformLocation(this.backdropBlurProgram, 'u_uvRect'),
+        uSrc: gl.getUniformLocation(this.backdropBlurProgram, 'u_src'),
+        uBackdrop: gl.getUniformLocation(this.backdropBlurProgram, 'u_backdrop'),
+        uBackdropFlipY: gl.getUniformLocation(this.backdropBlurProgram, 'u_backdropFlipY'),
       };
     } catch (err) {
       log.error('WebGL2 shader compile failed:', err instanceof Error ? err.message : String(err));
@@ -1557,6 +1761,10 @@ export class WebGL2Backend implements Backend {
   }
 
   // ─── Frame lifecycle ──────────────────────────────────────────────────────
+
+  setOutputDither(code: number): void {
+    this.ditherCode = code;
+  }
 
   beginFrame(clearColor: RGBA = [0, 0, 0, 1]): void {
     if (this.framingActive) {
@@ -1704,6 +1912,7 @@ export class WebGL2Backend implements Backend {
     if (this.shadowLocs.uShapeType) gl.uniform1f(this.shadowLocs.uShapeType, shapeType);
     if (this.shadowLocs.uSize) gl.uniform2f(this.shadowLocs.uSize, params.width, params.height);
     if (this.shadowLocs.uQuadSize) gl.uniform2f(this.shadowLocs.uQuadSize, quadW, quadH);
+    if (this.shadowLocs.uDither) gl.uniform1f(this.shadowLocs.uDither, this.ditherCode);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
@@ -1995,6 +2204,7 @@ export class WebGL2Backend implements Backend {
 
     if (this.gradientLocs.uStops) gl.uniform4fv(this.gradientLocs.uStops, stopColors);
     if (this.gradientLocs.uStopOffsets) gl.uniform4fv(this.gradientLocs.uStopOffsets, stopOffsets);
+    if (this.gradientLocs.uDither) gl.uniform1f(this.gradientLocs.uDither, this.ditherCode);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
@@ -2003,6 +2213,10 @@ export class WebGL2Backend implements Backend {
     if (!this.framingActive) return;
     if (params.lit) {
       this.drawLitTexturedQuad(params);
+      return;
+    }
+    if (params.gradientTint) {
+      this.drawGradientTexturedQuad(params);
       return;
     }
     const gl = this.gl;
@@ -2032,6 +2246,48 @@ export class WebGL2Backend implements Backend {
     gl.bindTexture(gl.TEXTURE_2D, t.handle);
     if (this.texturedLocs.uTex) gl.uniform1i(this.texturedLocs.uTex, 0);
 
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  // Glyph coverage quad tinted by a gradient sampled at the glyph's layout
+  // position (gradUV) — pixel-true gradient text that composes with per-unit
+  // kinetic animation. Called from drawTexturedQuad when gradientTint is set.
+  private drawGradientTexturedQuad(params: TexturedQuadDrawParams): void {
+    const gl = this.gl;
+    const g = params.gradientTint!;
+    this.applyBlend(params.blend);
+    const surface = this.currentSurface();
+    const transform = params.transform
+      ? projectPixelMatrix(params.transform, surface.width, surface.height, surface.flipY)
+      : composeQuadTransform(
+        params.cx, params.cy, params.width, params.height, params.rotation, surface.width, surface.height, params.skewX ?? 0, params.skewY ?? 0, surface.flipY,
+      );
+    const uvRect = params.uvRect ?? [0, 0, 1, 1];
+    const L = this.gradTexturedLocs;
+    gl.useProgram(this.gradTexturedProgram);
+    this.setupVertexAttribs(L.aPos, L.aUv);
+    if (L.uTransform) gl.uniformMatrix4fv(L.uTransform, false, transform);
+    if (L.uUvRect) gl.uniform4f(L.uUvRect, uvRect[0]!, uvRect[1]!, uvRect[2]!, uvRect[3]!);
+    if (L.uGradUV) gl.uniform4f(L.uGradUV, g.gradUV[0], g.gradUV[1], g.gradUV[2], g.gradUV[3]);
+    if (L.uAlphaGamma) gl.uniform1f(L.uAlphaGamma, params.alphaGamma ?? 1);
+    const n = Math.max(2, Math.min(8, g.stops.length));
+    if (L.uGmeta) gl.uniform4f(L.uGmeta, g.kind, n, Math.max(0, Math.min(1, g.opacity)), 0);
+    if (L.uGparams) gl.uniform4f(L.uGparams, g.params[0], g.params[1], g.params[2], g.params[3]);
+    const stopArr = new Float32Array(32);
+    const offArr = new Float32Array(8);
+    for (let i = 0; i < n; i++) {
+      const c = g.stops[i]!;
+      stopArr[i * 4] = c[0]; stopArr[i * 4 + 1] = c[1]; stopArr[i * 4 + 2] = c[2]; stopArr[i * 4 + 3] = c[3];
+      offArr[i] = g.offsets[i] ?? 0;
+    }
+    for (let i = n; i < 8; i++) offArr[i] = offArr[n - 1]!; // pad: stable t>=last test
+    if (L.uGstops) gl.uniform4fv(L.uGstops, stopArr);
+    if (L.uGoffsets) gl.uniform1fv(L.uGoffsets, offArr);
+    if (L.uDither) gl.uniform1f(L.uDither, this.ditherCode);
+    const tex = params.texture as WebGLTexture_;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex.handle);
+    if (L.uTex) gl.uniform1i(L.uTex, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
@@ -2097,6 +2353,7 @@ export class WebGL2Backend implements Backend {
     if (this.filteredLocs.uSigma) gl.uniform1f(this.filteredLocs.uSigma, sigma);
     if (this.filteredLocs.uColorOps) gl.uniform4f(this.filteredLocs.uColorOps, params.brightness, params.contrast, params.saturation, ((params.hueRotate ?? 0) * Math.PI) / 180);
     if (this.filteredLocs.uTint) gl.uniform4f(this.filteredLocs.uTint, tint[0], tint[1], tint[2], tint[3]);
+    if (this.filteredLocs.uDither) gl.uniform1f(this.filteredLocs.uDither, this.ditherCode);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, t.handle);
@@ -2137,6 +2394,105 @@ export class WebGL2Backend implements Backend {
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  drawBackdropBlurQuad(params: BackdropBlurQuadDrawParams): void {
+    if (!this.framingActive) return;
+    const gl = this.gl;
+    this.applyBlend(params.blend);
+    const surface = this.currentSurface();
+    const transform = composeQuadTransform(
+      params.cx, params.cy, params.width, params.height, 0,
+      surface.width, surface.height, 0, 0, surface.flipY,
+    );
+    gl.useProgram(this.backdropBlurProgram);
+    this.setupVertexAttribs(this.backdropBlurLocs.aPos, this.backdropBlurLocs.aUv);
+    if (this.backdropBlurLocs.uTransform) gl.uniformMatrix4fv(this.backdropBlurLocs.uTransform, false, transform);
+    if (this.backdropBlurLocs.uUvRect) gl.uniform4f(this.backdropBlurLocs.uUvRect, 0, 0, 1, 1);
+    if (this.backdropBlurLocs.uBackdropFlipY) gl.uniform1f(this.backdropBlurLocs.uBackdropFlipY, params.backdropFlipY ? 1 : 0);
+
+    const layer = params.layer as WebGLTexture_;
+    const bd = params.backdrop as WebGLTexture_;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, layer.handle);
+    if (this.backdropBlurLocs.uSrc) gl.uniform1i(this.backdropBlurLocs.uSrc, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bd.handle);
+    if (this.backdropBlurLocs.uBackdrop) gl.uniform1i(this.backdropBlurLocs.uBackdrop, 1);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  drawPixelShaderQuad(params: PixelShaderQuadDrawParams): void {
+    if (!this.framingActive) return;
+    const gl = this.gl;
+    let entry = this.pixelPrograms.get(params.glslSource);
+    if (entry === undefined) {
+      try {
+        const program = this.buildProgram(TEXTURED_VS, params.glslSource, 'pixelShader');
+        entry = {
+          program,
+          aPos: gl.getAttribLocation(program, 'a_pos'),
+          aUv: gl.getAttribLocation(program, 'a_uv'),
+          uTransform: gl.getUniformLocation(program, 'u_transform'),
+          uUvRect: gl.getUniformLocation(program, 'u_uvRect'),
+          uSrc: gl.getUniformLocation(program, 'u_src'),
+          uBackdrop: gl.getUniformLocation(program, 'u_backdrop'),
+          uBackdropFlipY: gl.getUniformLocation(program, 'u_backdropFlipY'),
+          uTime: gl.getUniformLocation(program, 'uTime'),
+          uResolution: gl.getUniformLocation(program, 'uResolution'),
+          uParams: gl.getUniformLocation(program, 'u_params'),
+          uTex: [0, 1, 2, 3].map((k) => gl.getUniformLocation(program, `u_tex${k}`)),
+        };
+      } catch (e) {
+        getLogger().warn(`pixel_shader failed to compile — element shown unstyled: ${e instanceof Error ? e.message : String(e)}`);
+        entry = null;
+      }
+      this.pixelPrograms.set(params.glslSource, entry);
+    }
+    if (!entry) {
+      this.drawTexturedQuad({ cx: params.cx, cy: params.cy, width: params.width, height: params.height, rotation: 0, texture: params.layer, blend: params.blend });
+      return;
+    }
+    this.applyBlend(params.blend);
+    const surface = this.currentSurface();
+    const transform = composeQuadTransform(
+      params.cx, params.cy, params.width, params.height, 0,
+      surface.width, surface.height, 0, 0, surface.flipY,
+    );
+    gl.useProgram(entry.program);
+    this.setupVertexAttribs(entry.aPos, entry.aUv);
+    if (entry.uTransform) gl.uniformMatrix4fv(entry.uTransform, false, transform);
+    if (entry.uUvRect) gl.uniform4f(entry.uUvRect, 0, 0, 1, 1);
+    if (entry.uTime) gl.uniform1f(entry.uTime, params.time);
+    if (entry.uResolution) gl.uniform2f(entry.uResolution, surface.width, surface.height);
+    if (entry.uParams) {
+      const pv = new Float32Array(16);
+      for (let i = 0; i < params.params.length && i < 16; i++) pv[i] = params.params[i]!;
+      gl.uniform4fv(entry.uParams, pv);
+    }
+    const layer = params.layer as WebGLTexture_;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, layer.handle);
+    if (entry.uSrc) gl.uniform1i(entry.uSrc, 0);
+    const bd = params.backdrop as WebGLTexture_;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bd.handle);
+    if (entry.uBackdrop) gl.uniform1i(entry.uBackdrop, 1);
+    if (entry.uBackdropFlipY) gl.uniform1f(entry.uBackdropFlipY, params.backdropFlipY ? 1 : 0);
+    // Image inputs: bind declared textures to units 2..5 (slot order). Slots the
+    // program doesn't sample fall back to the layer — harmless, never read.
+    const tex = params.textures ?? [];
+    for (let k = 0; k < 4; k++) {
+      const tk = (tex[k] as WebGLTexture_ | undefined) ?? layer;
+      gl.activeTexture(gl.TEXTURE2 + k);
+      gl.bindTexture(gl.TEXTURE_2D, tk.handle);
+      const loc = entry.uTex[k];
+      if (loc) gl.uniform1i(loc, 2 + k);
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.activeTexture(gl.TEXTURE0);
   }
 

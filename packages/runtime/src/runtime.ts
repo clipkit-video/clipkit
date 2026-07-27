@@ -43,6 +43,27 @@ export interface RuntimeInitOptions {
   backend?: 'auto' | 'webgpu' | 'webgl2';
 }
 
+/**
+ * Resolve `Source.output_dither` (§9.4) to the single float "code" the
+ * backends consume: magnitude = amplitude in 8-bit LSB, sign = pattern
+ * (+ ordered Bayer, − static TPDF noise), 0 = disabled. Default ON
+ * (+1 LSB Bayer) — absence enables it, `false`/`{enabled:false}`/amp 0
+ * disable it.
+ */
+export function resolveOutputDither(src: Source): number {
+  const od = src.output_dither;
+  if (od === false) return 0;
+  let amp = 1;
+  let noise = false;
+  if (od && typeof od === 'object') {
+    if (od.enabled === false) return 0;
+    if (typeof od.amplitude === 'number') amp = Math.max(0, Math.min(8, od.amplitude));
+    if (od.pattern === 'noise') noise = true;
+  }
+  if (!(amp > 0)) return 0;
+  return noise ? -amp : amp;
+}
+
 export class ClipkitRuntime implements FrameProducer {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
 
@@ -176,6 +197,26 @@ export class ClipkitRuntime implements FrameProducer {
     };
     scanLuts(src.elements);
     for (const url of lutUrls) lutRequests.push(this.preloadLut(url));
+
+    // pixel_shader effects can declare image inputs (textures: { name: url })
+    // at any depth — preload each as a regular image asset.
+    const pxTextureUrls = new Set<string>();
+    const scanPxTextures = (els: Element[]): void => {
+      for (const el of els) {
+        const effects = (el as { effects?: { type?: string; textures?: Record<string, string> }[] }).effects;
+        if (Array.isArray(effects)) {
+          for (const fx of effects) {
+            if (fx.type === 'pixel_shader' && fx.textures && typeof fx.textures === 'object') {
+              for (const url of Object.values(fx.textures)) if (typeof url === 'string' && url) pxTextureUrls.add(url);
+            }
+          }
+        }
+        const kids = (el as { elements?: Element[] }).elements;
+        if (Array.isArray(kids)) scanPxTextures(kids);
+      }
+    };
+    scanPxTextures(src.elements);
+    for (const url of pxTextureUrls) imageRequests.push(this.preloadImageUrl(url));
 
     // One decoder + one texture per video URL (v1 simplification):
     // elements sharing a URL share a playhead. When their timings
@@ -595,6 +636,7 @@ export class ClipkitRuntime implements FrameProducer {
           ? ([0, 0, 0, 0] as [number, number, number, number])
           : undefined;
     const bloom = resolveBloom(src, time);
+    this.backend.setOutputDither(resolveOutputDither(src));
     this.backend.beginFrame(clear);
     if (bloom) {
       // Render the scene into an offscreen target, then bloom → surface.
@@ -694,6 +736,7 @@ export class ClipkitRuntime implements FrameProducer {
     let spare = this.acquireBlurTarget(2, w, h);
     const full = { cx: w / 2, cy: h / 2, width: w, height: h, rotation: 0 } as const;
 
+    this.backend.setOutputDither(resolveOutputDither(src));
     this.backend.beginFrame(clear as [number, number, number, number]);
     for (let k = 0; k < samples; k++) {
       const tk = Math.min(

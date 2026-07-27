@@ -235,6 +235,51 @@ The rules that keep it safe and portable (all NORMATIVE):
   render — the property silently falls back to its base value. So if a
   move "does nothing," check the formula.
 
+### Generated sets (\`repeat\` / \`repeat_data\`) — one element, N copies
+
+Where do \`i\`/\`n\` get their values? From generated sets. An **image,
+text, shape or group** element renders as N copies via \`repeat: N\`
+(identical copies) or \`repeat_data: [row, …]\` (one copy per row).
+A row is **a partial element patch + a variable scope**: keys naming
+element fields (\`time\`, \`duration\`, \`text\`, \`fill_color\`, …) override
+that field for the copy; ALL row keys are in scope for the copy and its
+descendants — \`{key}\` in strings, bare identifiers in expressions
+(numeric values only). \`repeat_stagger\` delays copy k by \`k * s\`
+seconds (a row's own \`time\` wins). A grid, chart, step sequence,
+slideshow or word sequence is ONE element — never hand-list
+near-identical siblings:
+
+\`\`\`jsonc
+{ "type": "group", "layer": 2, "time": 0.8, "repeat_stagger": 0.2,
+  "repeat_data": [
+    { "label": "engine a", "w": 900, "color": "#1ba6ff" },   // one row = one chart row
+    { "label": "engine b", "w": 640, "color": "#8a5cff" } ],
+  "y": { "expr": "380 + i * 90" },
+  "elements": [
+    { "type": "text",  "layer": 1, "text": "{label}", "x": 200 },
+    { "type": "shape", "layer": 2, "shape": "rectangle", "x": 460, "height": 24,
+      "fill_color": "{color}", "width": { "expr": "ease(t, 0, 0.8, 0, w)" } } ] }
+\`\`\`
+
+Not valid on video/audio/caption/particles (schema rejects it). Spec:
+PROTOCOL.md §3.7.
+
+### Styles — declare appearance once, reference by name
+
+Source-level \`styles\` are named appearance bundles (font, fill, stroke,
+gradient, radius, opacity) that image/text/shape elements reference via
+\`style: "h1"\` — the \`fonts\` pattern for field bundles. One merge rule,
+no cascade: defaults < style < the element's own fields; the element
+always wins. Nine headlines sharing a look = one bundle + nine
+one-word references. Unknown style names fail validation. Spec:
+PROTOCOL.md §2.3.
+
+\`\`\`jsonc
+{ "styles": { "h1": { "font_family": "Inter", "font_weight": "800",
+                      "font_size": 120, "fill_color": "#f4f7fb" } },
+  "elements": [ { "type": "text", "layer": 1, "style": "h1", "text": "One." } ] }
+\`\`\`
+
 ### 3D transforms (CKP/1.0)
 
 Every element also takes \`x_rotation\` (tip top edge away), \`y_rotation\`
@@ -374,7 +419,31 @@ chain in array order and work on groups (the subtree flattens first).
 Layer styles — \`glow\` (\`radius\`, \`intensity\`, \`color\`), \`drop_shadow\`
 (\`offset_x/y\`, \`blur\`, \`color\`, \`opacity\`), \`stroke\` (\`width\`,
 \`color\`) — composite beneath the element and work on text, images,
-and groups (not just shapes).
+and groups (not just shapes). Backdrop readers — \`glass\` (\`refraction\`,
+\`dispersion\`, \`blur_radius\`, \`tint\`, … on shapes) and \`backdrop_blur\`
+(\`radius\`) — sample what's drawn BENEATH the element: put a translucent
+shape over content and add the effect for a refractive or frosted panel.
+Programmable — \`pixel_shader\` (\`source\`) runs a Pixel-Expr program per
+pixel: the \`Expr\` language + vectors/swizzles and the inputs \`uv\` (vec2
+0..1), \`t\`, \`resolution\`, \`aspect\`, compiled to GLSL+WGSL. ONE expression
+→ a color (\`float\`→gray, \`vec3\`→rgb, \`vec4\`→rgba); funcs incl. \`mix\`,
+\`smoothstep\`, \`length\`, \`noise\`, \`hash\`, \`fbm(p)\` (fractal noise), \`voronoi(p)\`
+→ \`(F1, F2, cellHash)\` (cellular — \`F2−F1\` = crisp borders), \`hsv2rgb\`, ctors
+\`vec2/3/4\`/\`rgb\`. Put it on
+a frame-filling shape for a generative background, e.g. \`mix(rgb(.02,.06,
+.16), rgb(.7,.87,.93), noise(uv*8.0 + vec2(t*.1, 0.0)))\`. Set
+\`reads_backdrop: true\` to sample the scene behind via \`backdrop(uv2)\`→vec4
+(refraction/chromatic), and multiply offsets by the \`coverage\` input to ramp
+the effect to zero at the element edge (no hard seam). Author with \`let NAME =
+EXPR;\` locals, declare keyframeable \`params\` (named float knobs read by name in
+source), and \`fold(N, init, acc-body)\` bounded loops. Raymarch with the SDF
+stdlib (\`sdSphere\`/\`sdBox\`/\`sdRoundBox\`/\`sdTorus\`/\`opUnion\`/\`opSubtract\`/\`opSmoothUnion\`/\`opExtrude\`/\`rotX/Y/Z\`):
+\`def shape(p) = ...;\` names the scene SDF, \`fold(80, 0, acc + shape(ro+rd*acc))\`
+marches it, \`normal(shape, p)\` gives a general central-difference normal — then
+shade, or make glass with \`refract\` + \`backdrop\`. Declare up to 4 image inputs
+with \`textures\` (\`{ name: url }\`) and sample them via \`texture(name, uv)\`→vec4
+— image distortion (\`texture(grid, uv + flow)\`), gradient ramps, or MSDF
+wordmarks (decode \`median(s.r, s.g, s.b)\` then \`smoothstep\` around \`0.5\`).
 
 Group time remapping — \`time_remap\` on a GROUP warps the clock for
 everything inside it: slow a whole composed scene to 20% at the
@@ -1082,6 +1151,7 @@ A Clipkit document is a JSON object with the following shape:
 | \`frame_rate\` | number | SHOULD | \`30\` | Frames per second. MUST be positive. |
 | \`background_color\` | string | MAY | \`"#000000"\` | Color (§3.4) the frame is cleared to before any element draws. Absent → opaque black. |
 | \`motion_blur\` | object | MAY | — | Whole-frame motion blur by exact sub-frame supersampling. See "Motion blur" below. |
+| \`output_dither\` | boolean \\| object | MAY | \`true\` | Anti-banding output dither (§9.4). **Default ON.** \`false\` disables; an object tunes \`amplitude\`/\`pattern\`. |
 | \`camera\` | object | MAY | — | Scene camera (CKP/1.0): perspective lens + movable pose (position/orientation) + \`sort\`. Absent = identity = exact 2D. See §4.4.2, §4.4.3. |
 | \`fonts\` | array | MAY | — | Font faces the renderer MUST register before rendering. See "Fonts" below. |
 | \`elements\` | array | REQUIRED | — | At least one element. See §4–5. |
@@ -1150,6 +1220,33 @@ Conforming runtimes MUST ignore unknown top-level fields (passthrough).
 This applies to all objects in this protocol unless otherwise stated.
 
 ---
+
+### 2.3. Styles
+
+The Source MAY declare \`styles\`: a map of **named appearance bundles**
+that image, text and shape elements reference via \`style: "<name>"\` —
+the \`fonts\` pattern ("declare once, reference by name") generalized to
+field bundles. NORMATIVE:
+
+- A style bundle may contain ONLY appearance fields: \`font_family\`,
+  \`font_weight\`, \`font_size\`, \`letter_spacing\`, \`fill_color\`,
+  \`stroke_color\`, \`stroke_width\`, \`gradient\`, \`border_radius\`,
+  \`opacity\`. Never identity, timing, layer, position or repetition.
+- Merge is one rule, applied flat: **runtime defaults < style < the
+  element's own fields.** There is NO cascade, no inheritance between
+  styles, no selectors.
+- Referencing an undeclared style name is a validation error.
+- Bakeability: \`style + reference ≡ the same fields inlined on the
+  element\` — two encodings of the same document; a conforming tool MAY
+  flatten styles away.
+
+\`\`\`json
+{ "styles": { "h1": { "font_family": "Inter", "font_weight": "800",
+                      "font_size": 120, "fill_color": "#f4f7fb" } },
+  "elements": [
+    { "type": "text", "layer": 1, "style": "h1", "text": "One.", "x": 960, "y": 480 },
+    { "type": "text", "layer": 2, "style": "h1", "text": "Two.", "time": 10, "x": 960, "y": 480 } ] }
+\`\`\`
 
 ## 3. Coordinate system, units, and types
 
@@ -1301,6 +1398,61 @@ property's base value. Expressions are numeric-only in this version;
 string/text expressions are reserved.
 
 ---
+
+### 3.7. Generated sets (\`repeat\` / \`repeat_data\`)
+
+An **image, text, shape or group** element MAY render as a *generated
+set* of copies, declared one of two mutually exclusive ways:
+
+- \`repeat: N\` (integer, 2–500) — N identical copies.
+- \`repeat_data: [row, …]\` (2–500 rows) — one copy per row. **A row is a
+  partial element patch + a variable scope**: values are strings or
+  numbers; keys are identifier-shaped.
+  1. A row key that names an element field (\`time\`, \`duration\`, \`text\`,
+     \`fill_color\`, …) overrides that field for the copy. Structural
+     keys (\`id\`, \`type\`, \`layer\`, \`elements\`, \`repeat\`, \`repeat_data\`,
+     \`repeat_stagger\`, \`style\`) and expression-reserved names (\`t\`,
+     \`dur\`, \`i\`, \`n\`, \`value\`, \`PI\`, \`TAU\`, \`E\`) are invalid row keys.
+  2. EVERY row key is in scope for the copy **and its descendants**:
+     in expressions as a bare identifier (numeric values only —
+     strings resolve NaN and fall back, §3.6), and in strings as the
+     literal placeholder \`{key}\`.
+
+Common semantics, NORMATIVE:
+
+- Expressions on the set's animatable properties see \`i\` = copy index
+  (0-based) and \`n\` = copy count (the binding §3.6's reserved
+  variables were defined for). Outside a set, \`i = 0\`, \`n = 1\`.
+- \`repeat_stagger: s\` starts copy k at \`time + k * s\` (requires a
+  numeric \`time\`); a row's explicit \`time\` key wins over stagger.
+- Placeholder substitution (\`{i}\`, \`{i1}\`, \`{key}\`) applies to every
+  top-level string field of the copy (text, source, colors, …) except
+  \`id\`/\`type\`/\`style\`, plus gradient stop colors. No other template
+  syntax exists.
+- A group copy deep-clones its subtree: children share the copy's
+  scope (a row is a *component's* data). Group masks are v1-exempt.
+- Copies share the element's \`layer\` and draw in \`i\` order; a copy's
+  \`id\` is the element's id suffixed \`#k\`.
+- Bakeability: \`template + rows ≡ the expanded element list\` — two
+  encodings of the same scene, exactly as \`expr ≡ keyframes\`.
+
+NOT valid on video, audio, caption or particles elements
+(schema-enforced; particles is its own generated set, video repetition
+would multiply decode sessions). A grid, chart row, step sequence,
+slideshow or word sequence is therefore ONE element:
+
+\`\`\`json
+{ "type": "group", "layer": 2, "time": 0.8, "repeat_stagger": 0.2,
+  "repeat_data": [
+    { "label": "engine a", "w": 900, "color": "#1ba6ff" },
+    { "label": "engine b", "w": 640, "color": "#8a5cff" } ],
+  "y": { "expr": "380 + i * 90" },
+  "elements": [
+    { "type": "text",  "layer": 1, "text": "{label}", "x": 200 },
+    { "type": "shape", "layer": 2, "shape": "rectangle", "x": 460,
+      "height": 24, "fill_color": "{color}",
+      "width": { "expr": "ease(t, 0, 0.8, 0, w)" } } ] }
+\`\`\`
 
 ## 4. The element model
 
@@ -1676,18 +1828,20 @@ composite. Runtimes encountering an effect \`type\` they don't implement
 MUST skip that effect (rendering the element without it) and SHOULD
 warn.
 
-**Effects read only the element's own rendered pixels — with ONE
-exclusion: \`glass\`.** Glass additionally reads the element's
-*backdrop*: the current surface's pixels at the element's position in
-draw order (§4.2), i.e. everything drawn before it on the same
-surface. It gets this carve-out because the effect is widely known and
-in high demand, and there is no proper decomposition — refraction
-needs the pixels behind the pane — and the alternative, a first-class
-glass element type, is deliberately not part of this protocol. No
-other effect type reads the backdrop, and backdrop-sampling blend
-modes (overlay, soft-light) remain excluded (§4.5). Note the
-relationship stays one-way: glass READS what is beneath it but never
-alters how any other element renders.
+**Most effects read only the element's own rendered pixels. A few
+read the element's *backdrop*** — the current surface's pixels at the
+element's position in draw order (§4.2), i.e. everything drawn before
+it on the same surface: \`glass\` (refraction needs the pixels behind the
+pane), \`backdrop_blur\` (a frosted panel), and \`pixel_shader\` when its
+\`reads_backdrop\` flag is set (via the program's \`backdrop()\` function). A conforming runtime
+snapshots the backdrop once, before the element's layer is drawn. No
+other effect type reads the backdrop. The relationship stays one-way: a
+backdrop-reading effect READS what is beneath it but never alters how
+any other element renders. A first-class glass/backdrop *element* type
+is deliberately not part of this protocol — backdrop reads are an
+opt-in effect capability, not a layer kind. (The piecewise blend modes
+\`overlay\`/\`hard-light\`/\`soft-light\` likewise composite against a
+backdrop snapshot, per §4.5, but as blend modes rather than effects.)
 
 Pixel-grid coordinates below are the element's layer pixels at output
 resolution; cells are aligned to the layer's origin. Color math runs
@@ -1992,6 +2146,101 @@ coordinate hand-off changes:
 With no 3D in play the orthographic path applies unchanged —
 documents valid in CKP/1.0 render bit-identically.
 
+#### \`backdrop_blur\`
+
+| Param | Default | Meaning |
+|---|---|---|
+| \`radius\` | \`12\` | Backdrop Gaussian blur σ in canvas pixels (the §4.6 ladder). \`0\` = no blur. Animatable. |
+
+A frosted panel — the second effect that reads the backdrop (intro
+above). Within the element's silhouette the backdrop is blurred and the
+element painted over it: CSS \`backdrop-filter: blur()\` semantics, masked
+to the element's own alpha rather than a border box, so it works on any
+element type (a translucent shape, text, a group).
+
+Let \`b\` be the backdrop snapshot blurred by \`radius\` (the §4.6
+downsample ladder, same as glass frosting) and \`s\` the element's own
+premultiplied layer. The footprint \`m = smoothstep(0, 0.04, s.a)\` is
+full coverage wherever the element is present, so the *sharp* backdrop
+does not bleed through inside the panel; the element's alpha then
+controls tint-vs-frost — a translucent fill reads as mostly blurred
+backdrop, an opaque one as mostly the element. The composite is
+\`out = (s.rgb + b.rgb·(1 − s.a)) · m\` with coverage \`m\`, normal-blended
+so the sharp surface shows outside the silhouette. One-way like glass:
+it reads the backdrop, never alters it.
+
+#### \`pixel_shader\`
+
+| Param | Default | Meaning |
+|---|---|---|
+| \`source\` | — (required) | A Pixel-Expr program: ONE expression evaluating per pixel to a color. |
+| \`reads_backdrop\` | \`false\` | Enable \`backdrop(uv2)\` → vec4 to sample the composited scene beneath (refraction, chromatic aberration, ripple). Snapshots the backdrop. |
+| \`params\` | — | Up to 16 named float knobs (\`{ "warp": <number \\| keyframes> }\`) referenced by name in \`source\` and animatable from the timeline. |
+| \`textures\` | — | Up to 4 image inputs (\`{ "grid": "<url>" }\`) sampled in \`source\` with \`texture(name, uv)\` → vec4. URLs preload as image assets. |
+
+Author per-pixel color in **Pixel-Expr** — the \`Expr\` procedural-animation
+language (§3.6) lifted from scalar/CPU to vec4/GPU: the same operators,
+constants, and functions, EXTENDED with vector types, swizzles, and the
+per-pixel inputs below. The program is one expression; the runtime
+type-checks it and compiles it to GLSL ES 3.0 AND WGSL from a single AST, so
+both backends render identically. There are NO raw shaders — the closed
+grammar and fixed stdlib are the determinism/safety boundary (an unknown
+function is a compile error, not a hole), exactly as for Tier-A \`Expr\`.
+
+Inputs in scope: \`uv\` (vec2, 0..1 across the surface), \`t\` (element-local
+seconds), \`resolution\` (vec2, px), \`aspect\` (float); constants \`PI\`/\`TAU\`/\`E\`.
+Types \`float\`/\`vec2\`/\`vec3\`/\`vec4\` with scalars broadcasting against vectors;
+operators \`+ - * / % ^\` (\`^\` = pow, \`%\` = floored mod), comparisons, and
+\`cond ? a : b\`; swizzles \`.x\` / \`.rgb\` / \`.xy\`. Functions are the \`Expr\` math
+set (\`sin cos … clamp mix smoothstep step …\`) plus \`length distance dot
+normalize cross reflect\`, the constructors \`vec2\`/\`vec3\`/\`vec4\`/\`rgb\`/\`rgba\`,
+and the deterministic \`hash\`/\`noise\` (a PCG2D hash over float bits, bit-stable
+across GPUs — never \`sin\`-based). Reusable procedural building blocks layer on
+that hash (same determinism): **\`fbm(p)\`** (5-octave value fBm, ∈[0,1] —
+clouds/smoke/marble/grain), **\`voronoi(p)\`** → vec3 \`(F1, F2, cellHash)\` (nearest
+and second-nearest feature distances plus a 0..1 per-cell hash — \`F2 − F1\` draws
+crisp cell borders, \`cellHash\` colors each cell), and the color helper
+**\`hsv2rgb(vec3)\`** (h, s, v → rgb). For 3D, an SDF stdlib: primitives
+\`sdSphere\`/\`sdBox\`/\`sdRoundBox\`/\`sdTorus\`/\`sdPlane\`/\`sdCapsule\`; ops
+\`opUnion\`(min)/\`opIntersect\`(max)/\`opSubtract\`/\`opSmoothUnion\`/\`opOnion\`/\`opExtrude\`
+(2D→3D); domain rotations \`rotX\`/\`rotY\`/\`rotZ\`; and \`refract\` for glass.
+
+**Bindings, knobs, loops.** \`let NAME = EXPR;\` introduces a local (inlined at
+compile time) — \`let w = sin(uv.x*8.0 + t); rgb(w, w, 1.0)\`. **\`params\`**
+declares named float knobs, keyframeable from the timeline and read by name in
+\`source\` (a \`warp\` param drives \`... * warp\`). **\`fold(N, init, body)\`** is a
+bounded loop — \`N\` a constant \`1..256\`, threading an accumulator \`acc\` (from
+\`init\`) over \`i = 0..N-1\`, returning the final \`acc\`. It is the iteration
+primitive for raymarching: \`fold(64, 0.0, acc + sdSphere(ro + rd*acc, 1.0))\`
+sphere-traces an SDF. **\`def NAME(args) = EXPR;\`** declares a reusable function
+(inlined at compile time), and **\`normal(fn, p)\`** computes the central-
+difference normal of a one-parameter SDF \`def\` at \`p\` — general shading for any
+shape, and with \`refract\` + \`backdrop\`, a glass material. Folds do not nest.
+
+With \`reads_backdrop: true\`, \`backdrop(uv2)\` → vec4 samples the composited
+scene beneath the element (refraction, chromatic aberration, ripple), joining
+\`glass\`/\`backdrop_blur\` as a backdrop reader (intro). The \`coverage\` input —
+the element's own alpha at the pixel, softened by the runtime to a smooth edge
+ramp (≈1 deep inside, 0 across the rim) — lets such effects fade displacement
+to zero at the edge, e.g. \`backdrop(uv + offset * coverage)\`, so shapes
+crossing the boundary morph continuously instead of cutting.
+
+**Image inputs.** Declare up to four with \`textures\` (\`{ name: url }\`) and
+sample them in \`source\` with **\`texture(name, uv)\`** → vec4 (rgba; the sampler
+is linear / clamp-to-edge). The \`name\` is a declared texture, not a value. URLs
+preload like any image asset. Use them for image distortion (\`texture(grid, uv
++ flow)\`), gradient/data ramps, or MSDF wordmarks — decode an MSDF atlas with
+**\`median(s.r, s.g, s.b)\`** then \`smoothstep\` around \`0.5\` for a crisp,
+resolution-independent glyph edge.
+
+The output type promotes to a color: \`float\` → grayscale, \`vec3\` → rgb (α=1),
+\`vec4\` → rgba. The result is clamped to [0,1], premultiplied, and masked to
+the element's own alpha, so the program fills the element footprint — a
+frame-filling shape becomes a full-frame generative layer. Determinism: \`t\`
+is the frame clock (never wall-clock), work is in normalized \`uv\`, and all
+randomness routes through \`hash\`. Example:
+\`mix(rgb(.02,.06,.16), rgb(.7,.87,.93), noise(uv*8.0 + vec2(t*.1, 0.0)))\`.
+
 ### 4.8. Lighting and materials (CKP/1.0, NORMATIVE)
 
 A Source MAY declare \`lights\` and an \`environment\`; an element MAY carry
@@ -2127,28 +2376,51 @@ translate in the parent plane (§4.4.3).
 #### 5.1.1. Gradients
 
 \`\`\`ts
+// Geometric params are AnimatableNumber = number | Keyframe[] | { expr } —
+// they may be keyframed or expression-driven (e.g. angle: { expr: "t * 30" }).
 interface LinearGradient {
   type: "linear";
-  angle?: number;       // degrees, CSS linear-gradient() convention:
-                        //   0 = to top, clockwise. 90 = to right,
-                        //   180 = to bottom (default), 270 = to left.
-  stops: GradientStop[]; // 2..4 stops
+  angle?: AnimatableNumber; // degrees, CSS linear-gradient() convention:
+                            //   0 = to top, clockwise. 90 = to right,
+                            //   180 = to bottom (default), 270 = to left.
+  stops: GradientStop[];    // 2..4 stops
 }
 interface RadialGradient {
   type: "radial";
-  cx?: number;          // 0..1 of bounding box, default 0.5
-  cy?: number;
-  radius?: number;      // 0..1, default 0.5
+  cx?: AnimatableNumber;     // 0..1 of bounding box, default 0.5
+  cy?: AnimatableNumber;
+  radius?: AnimatableNumber; // 0..1, default 0.5
   stops: GradientStop[];
 }
+// Angular / sweep gradient — TEXT ONLY (rendered via Canvas2D; shapes use
+// linear/radial). \`rotation: { expr: "t * 60" }\` spins the sweep — the
+// rotating-rainbow-stroke primitive.
+interface ConicGradient {
+  type: "conic";
+  cx?: AnimatableNumber;       // sweep center, 0..1 of box, default 0.5
+  cy?: AnimatableNumber;
+  rotation?: AnimatableNumber;  // start angle in degrees, default 0
+  stops: GradientStop[];       // 2..8 stops
+}
 interface GradientStop {
-  offset: number;       // 0..1
-  color: string;        // hex
+  offset: AnimatableNumber; // 0..1 — keyframeable / expressionable: animate it to
+                            //   slide a color band (e.g. a white edge sweeping a
+                            //   wipe across text). Static \`number\` is the common case.
+  color: string;            // hex
 }
 \`\`\`
 
-Implementations MUST support at least 4 stops. The gradient direction
-for linear gradients uses CSS-style angle conventions.
+A moving stop is how time-based gradient effects are authored — e.g. a white
+edge wiping across a headline is a 3-stop gradient \`white@0\`, \`white@{offset
+keyframed 0→1}\`, \`blue@1\`: at t=0 it's \`white→blue\`, and as the middle stop
+sweeps to 1 the whole text resolves to white.
+
+Implementations MUST support at least 4 stops (8 for conic). The gradient
+direction for linear gradients uses CSS-style angle conventions. **Shapes**
+accept \`linear\` / \`radial\` (shader-rendered); **text** accepts
+\`linear\` / \`radial\` / \`conic\` (Canvas2D-rendered). Geometric params
+(\`angle\`, \`cx\`, \`cy\`, \`radius\`, \`rotation\`) are keyframeable and
+expression-driven.
 
 #### 5.1.2. Corner radius
 
@@ -2167,6 +2439,15 @@ explicit \`\\n\` breaks, \`line_height\`, and per-line backgrounds. The
 default font is **Inter** (not a platform stack); \`font_family\` selects
 another registered family (§2.1 \`fonts\`).
 
+**Fill & stroke gradients.** \`gradient\` fills the glyphs with a
+linear / radial / conic gradient (overrides \`fill_color\`). A stroke is drawn
+with \`stroke_width\` + \`stroke_color\` (or a \`stroke_gradient\`), positioned by
+\`stroke_align\` (\`outer\` default — outside the fill, so it never eats the
+letterform). Because gradient geometry is keyframeable / expression-driven, a
+\`conic\` \`stroke_gradient\` with \`rotation: { expr: "t * 60" }\` is a **rotating
+rainbow outline**. Gradient/stroke text rasterizes through Canvas2D (single
+line; multi-line gradient text is not yet supported).
+
 \`\`\`ts
 interface TextElement extends BaseElement {
   type: "text";
@@ -2178,8 +2459,11 @@ interface TextElement extends BaseElement {
   font_weight?: number | string;       // "400", "bold", etc.
   font_style?: "normal" | "italic";
   fill_color?: string;
+  gradient?: LinearGradient | RadialGradient | ConicGradient;  // fill; overrides fill_color
   stroke_color?: string;
   stroke_width?: number;
+  stroke_gradient?: LinearGradient | RadialGradient | ConicGradient; // overrides stroke_color
+  stroke_align?: "center" | "outer" | "inner";  // default "outer"
   text_align?: "left" | "center" | "right";
   letter_spacing?: number;
 
@@ -2758,6 +3042,9 @@ interface Animation {
   split?: "letter" | "word";           // text-* unit granularity (§6.5)
   stagger?: number;                    // text-* seconds between units (§6.5)
   axis?: "x" | "y" | "z";              // text-flip rotation axis (§6.5, CKP/1.0)
+  order?: "forward" | "reverse" | "random";  // text-* reveal order (§6.5); default forward
+  fade?: boolean;                      // text-* per-unit opacity fade (§6.5); default true
+  seed?: number;                       // drift noise; also seeds text-* order:"random"
 }
 \`\`\`
 
@@ -2887,6 +3174,23 @@ continuously across spans and line breaks. Unit \`u\` starts at
 \`text-fly\`, \`"letter"\` for \`text-typewriter\`/\`text-wave\`/\`text-flip\`.
 \`stagger\`: \`0.09\` for word splits, \`0.035\` for letter splits.
 Per-unit \`duration\` default \`0.5\`.
+
+**Reveal order (\`order\`).** Which unit occupies which stagger slot.
+\`"forward"\` (default) is reading order — unit 0 first. \`"reverse"\`
+counts from the last unit. \`"random"\` deterministically shuffles the
+slots (After Effects "Randomize Order"): a unit's slot is its rank in a
+seed-driven permutation of all units, so the total span (\`count ×
+stagger\`) is unchanged — only the per-unit start times are permuted. The
+shuffle is pure integer math keyed on \`seed\` (default 0), identical on
+every backend and every run. \`reverse\`/\`random\` need the unit total, so
+they only apply when the renderer knows it (always, in practice).
+
+**Opacity fade (\`fade\`).** Whether each unit fades opacity \`0→1\` as it
+animates in (default \`true\`). Set \`false\` for a solid
+position/transform-only entrance — units slide or flip into place at
+full opacity without fading (matching an After Effects animator that
+drives Position/Scale only, no Opacity). \`text-appear\` is fade-only and
+ignores the flag; \`text-typewriter\` is a hard step and is unaffected.
 
 | Type | Per-unit effect | Defaults |
 |---|---|---|
@@ -3112,6 +3416,50 @@ t = f / frame_rate
 | \`gif\` | Animated GIF. Audio is silently dropped. |
 
 Runtimes MAY support output formats beyond these.
+
+### 9.4. Output dither (anti-banding)
+
+8-bit per-channel output has 256 levels per channel. A smooth, low-contrast
+ramp — a gradient, a soft drop-shadow falloff, a blur or glow, a fade to
+black — spreads a single 1/255 step across many pixels, so it shows discrete
+**bands** rather than a smooth blend (diagonal "streaks" when the ramp is
+diagonal). This is intrinsic to 8-bit quantization, not to any one element.
+
+A conforming runtime SHOULD therefore apply a small **output dither** as it
+quantizes smooth ramps to the 8-bit frame: a sub-LSB perturbation, keyed to
+the pixel, that lets a ramp cross an 8-bit step as fine texture instead of a
+hard edge. It is **on by default** — authors get band-free gradients without
+asking, and there is no per-element surface.
+
+\`output_dither\` controls it at the Source root:
+
+- \`true\` (or absent) — enabled with defaults (amplitude 1, pattern \`bayer\`).
+- \`false\` — disabled; the runtime quantizes without dither (byte-exact).
+- object — \`{ enabled?, amplitude?, pattern? }\`:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| \`enabled\` | boolean | \`true\` | Master switch; \`false\` is the same as \`output_dither: false\`. |
+| \`amplitude\` | number | \`1\` | Dither strength in 8-bit LSB units (\`1\` ≈ ±0.5 LSB). \`0\` disables. Clamped to 0..8. |
+| \`pattern\` | string | \`"bayer"\` | \`"bayer"\` = ordered 4×4 matrix; \`"noise"\` = static per-pixel triangular-PDF hash. |
+
+The dither **MUST be deterministic** — keyed to the pixel position with no
+time term — so seeded renders stay reproducible and the grain does not
+shimmer between frames. Its amplitude is sub-LSB, well inside the §9.1
+±1/255 tolerance, so a dithered and an undithered runtime remain visually
+equivalent.
+
+This is a distinct mechanism from the \`dither\` **effect** (§4.7), which is a
+deliberately visible retro posterize (low \`levels\`); \`output_dither\` is a
+near-invisible global anti-banding pass and the two do not share a name.
+
+> Implementation note (non-normative): banding can also be reintroduced
+> *after* a clean dither by a lossy encoder discarding low-amplitude noise in
+> flat regions (e.g. H.264 rate control). Render-time dither is necessary but
+> not always sufficient; pair it with sane rate control or a higher-bit-depth
+> intermediate where the last drop of smoothness matters. GIF output, which
+> quantizes to a ≤256-color palette, needs its own palette dither (a separate
+> mechanism, same "default on" intent) — not yet specified here.
 
 ---
 

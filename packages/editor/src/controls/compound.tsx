@@ -84,9 +84,10 @@ export function GradientControl({
   // The swatch is a fixed horizontal ramp (just shows the colors); the
   // protocol's `angle` now uses the CSS convention directly (0° = to top,
   // clockwise; default 180 = to bottom).
-  const sorted = [...stops].sort((a, b) => a.offset - b.offset);
+  const gOff = (s: GradientStop): number => (typeof s.offset === 'number' ? s.offset : 0);
+  const sorted = [...stops].sort((a, b) => gOff(a) - gOff(b));
   const rampStops = sorted
-    .map((s: GradientStop) => `${s.color} ${s.offset * 100}%`)
+    .map((s: GradientStop) => `${s.color} ${gOff(s) * 100}%`)
     .join(', ');
 
   // Drag a stop handle along the ramp — writes the stop's literal
@@ -145,8 +146,8 @@ export function GradientControl({
             // clearly a control (a subtle ring read as a paint
             // artifact on dark ends).
             className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.6)] cursor-ew-resize hover:scale-125 transition-transform"
-            style={{ left: `${stop.offset * 100}%`, background: stop.color }}
-            title={`Stop ${i + 1} · ${Math.round(stop.offset * 100)}% (drag)`}
+            style={{ left: `${gOff(stop) * 100}%`, background: stop.color }}
+            title={`Stop ${i + 1} · ${Math.round(gOff(stop) * 100)}% (drag)`}
             aria-label={`Drag stop ${i + 1}`}
             onPointerDown={(e) => dragStop(e, i)}
           />
@@ -169,14 +170,14 @@ export function GradientControl({
           />
           {value.type === 'linear' ? (
             <NumberControl
-              value={value.angle ?? 180}
+              value={typeof value.angle === 'number' ? value.angle : 180}
               suffix="°"
               fluid
               onChange={(v) => patch({ angle: v })}
             />
           ) : (
             <NumberControl
-              value={value.radius ?? 0.5}
+              value={typeof value.radius === 'number' ? value.radius : 0.5}
               min={0}
               max={1}
               step={0.05}
@@ -192,7 +193,7 @@ export function GradientControl({
           {/* Color gets the wider share so the hex fits unclipped. */}
           <div className="flex-1 min-w-0 grid grid-cols-[0.75fr_1.25fr] gap-2 items-center">
             <NumberControl
-              value={stop.offset}
+              value={gOff(stop)}
               min={0}
               max={1}
               step={0.01}
