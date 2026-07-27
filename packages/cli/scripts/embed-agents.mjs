@@ -16,6 +16,9 @@ const docs = [
   { name: 'AGENTS_MD_CONTENT', path: 'AGENTS.md' },
   { name: 'PROTOCOL_MD_CONTENT', path: 'PROTOCOL.md' },
   { name: 'CARD_MD_CONTENT', path: 'CARD.md' },
+  { name: 'PATTERN_DATA_VIZ_CONTENT', path: 'patterns/data-viz.md' },
+  { name: 'PATTERN_CINEMATIC_UI_CONTENT', path: 'patterns/cinematic-ui.md' },
+  { name: 'PATTERN_UI_SCREENCAST_CONTENT', path: 'patterns/ui-screencast.md' },
 ];
 
 const escape = (s) =>

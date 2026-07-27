@@ -32,6 +32,14 @@ export function setScopeOf(el: object): SetScope {
   return scopes.get(el) ?? NO_SET;
 }
 
+/** Carry `from`'s set scope onto a derived wrapper/clone of the same element.
+ *  Any render path that spread-copies an element (style merge, effects inner
+ *  pass, …) must call this or the copy's exprs lose `i`/`n`/row vars. */
+export function adoptSetScope(target: object, from: object): void {
+  const s = scopes.get(from);
+  if (s) scopes.set(target, s);
+}
+
 const REPEATABLE = new Set<string>(['image', 'text', 'shape', 'group']);
 // Structural keys a row may never patch (also rejected protocol-side).
 const ROW_BLOCKED = new Set<string>(['id', 'type', 'layer', 'elements', 'repeat', 'repeat_data', 'repeat_stagger', 'style']);
@@ -72,12 +80,17 @@ function makeCopy(el: Element, i: number, n: number, vars: Row | undefined, styl
     const v = copy[k];
     if (typeof v === 'string' && k !== 'id' && k !== 'type' && k !== 'style') copy[k] = subst(v, i, vars);
   }
-  // …and inside gradient stop colors (the one nested string surface).
+  // …and inside the nested string surfaces: gradient stop colors and
+  // effect-entry colors (glow/drop_shadow tint, …).
   for (const gk of ['gradient', 'stroke_gradient'] as const) {
     const g = copy[gk] as { stops?: Array<{ color?: unknown }> } | undefined;
     if (g && Array.isArray(g.stops) && g.stops.some((st) => typeof st.color === 'string' && st.color.includes('{'))) {
       copy[gk] = { ...g, stops: g.stops.map((st) => (typeof st.color === 'string' ? { ...st, color: subst(st.color, i, vars) } : st)) };
     }
+  }
+  const fx = copy.effects as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(fx) && fx.some((f) => typeof f.color === 'string' && f.color.includes('{'))) {
+    copy.effects = fx.map((f) => (typeof f.color === 'string' ? { ...f, color: subst(f.color, i, vars) } : f)) as never;
   }
   const children = (copy as { elements?: readonly Element[] }).elements;
   if (Array.isArray(children)) {

@@ -1,7 +1,7 @@
 {
   "name": "@clipkit/renderer",
-  "version": "1.3.0",
-  "description": "Render a ClipKit Source to MP4 locally — headless Chrome + WebCodecs, driven by Playwright. The Node-side renderer for @clipkit/runtime.",
+  "version": "1.3.1",
+  "description": "Render a ClipKit Source to MP4 locally \u2014 headless Chrome + WebCodecs, driven by Playwright. The Node-side renderer for @clipkit/runtime.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

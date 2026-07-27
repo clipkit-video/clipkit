@@ -874,7 +874,9 @@ function checkElements(
         }
       });
     }
-    if (el.style !== undefined && styleNames !== null && typeof el.style === 'string' && !styleNames.has(el.style)) {
+    // caption.style is the kinetic-preset enum (e.g. "tiktok_bounce"), NOT a
+    // styles-bundle reference — a field-name collision, so captions are exempt.
+    if (el.type !== 'caption' && el.style !== undefined && styleNames !== null && typeof el.style === 'string' && !styleNames.has(el.style)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [...elPath, 'style'],

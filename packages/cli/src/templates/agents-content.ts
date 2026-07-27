@@ -3828,9 +3828,305 @@ unknown style name.
 - Set root \`duration\` explicitly; give hold time after the last entrance so the
   end frame is calm.
 - Keyframe/preset times are element-local (element \`time\` offsets the clock).
-- Validate before you finish: \`node tools/ck-validate.mjs <file>\`.
+- Validate before you finish: \`clipkit validate <file>\` (or the MCP
+  \`validate_project\` tool).
+- Authoring a known archetype? Load ONE pattern card alongside this card —
+  proven idioms, ~4-5KB each: \`data-viz\` (count-ups, bar/progress rows),
+  \`cinematic-ui\` (product hero shots, camera rigs), \`ui-screencast\` (faked
+  app UI, typing, cursor, state transitions). CLI \`clipkit docs
+  pattern-<name>\`, MCP \`read_docs\` topic \`pattern-<name>\`.
 - Need more than this card covers (3D/camera, particles detail, video/audio
   trims, Lottie import, the pattern catalog)? Fetch the full guide: CLI
   \`clipkit docs agents\`, MCP \`read_docs\` — don't guess at fields.
+`;
+
+export const PATTERN_DATA_VIZ_CONTENT = `# Pattern card: data-viz
+
+**When to use:** stat reveals, year-in-review dashboards, KPI/progress rows —
+numbers and bars ARE the story. Loads alongside the core card; idioms only.
+
+## Count-up flipbook (the data-viz idiom)
+
+An animating number is N short-lived copies of ONE text element. Rows are the
+display strings; element \`duration\` == \`repeat_stagger\`, so exactly one copy is
+on screen at a time. The last row holds with \`"duration": "end"\`.
+
+\`\`\`json
+{ "type": "text", "id": "value-1", "layer": 16, "time": 1.0, "duration": 0.14,
+  "x": 1760, "y": 356, "x_anchor": "100%", "font_size": 44,
+  "font_family": "Inter, sans-serif", "font_weight": 800, "fill_color": "#67e8f9",
+  "text": "{v}", "repeat_stagger": 0.14,
+  "animations": [ { "type": "fade-in", "time": "start", "duration": 0.05 } ],
+  "repeat_data": [
+    { "v": "0" }, { "v": "1.4M" }, { "v": "2.4M" }, { "v": "3.1M" },
+    { "v": "3.6M" }, { "v": "3.9M" }, { "v": "4.1M" }, { "v": "4.2M", "duration": "end" } ] }
+\`\`\`
+
+Copies are UNIFORM in time, so bake easing into the values: shrinking deltas
+toward the target read as ease-out. Format in the data ("4.2M", "1,240",
+"4.8/5") — the renderer never formats numbers.
+
+Exact-sync variant: rows can instead each patch \`time\` + \`duration\`
+(element-local seconds) when a counter must hit landmarks with a bar or beat:
+
+\`\`\`json
+"repeat_data": [
+  { "v": "0K",   "time": 1.1,  "duration": 0.07 },
+  { "v": "61K",  "time": 1.17, "duration": 0.07 },
+  { "v": "114K", "time": 1.24, "duration": 0.07 },
+  { "v": "318K", "time": 1.31, "duration": 5.69 } ]
+\`\`\`
+
+## Bar rows: one element per role
+
+A 4-row dashboard is 3 elements (tracks, bars, labels) plus one flipbook per
+value. \`i\` spaces the grid, row data drives width/colors/text, \`repeat_stagger\`
+cascades the rows.
+
+\`\`\`json
+{ "type": "shape", "id": "tracks", "layer": 4, "time": 0, "duration": "end",
+  "x": 160, "y": { "expr": "402 + i * 170" }, "width": 1600, "height": 50,
+  "border_radius": 25, "fill_color": "#242a4a", "opacity": 0.55, "repeat": 4 },
+{ "type": "shape", "id": "bars", "layer": 8, "time": 1.0, "duration": "end",
+  "x": 160, "y": { "expr": "402 + i * 170" }, "height": 50, "border_radius": 25,
+  "width": { "expr": "ease(t, 0, 1.1, 0, w)" }, "repeat_stagger": 0.4,
+  "gradient": { "type": "linear", "angle": 90,
+    "stops": [ { "offset": 0, "color": "{c0}" }, { "offset": 1, "color": "{c1}" } ] },
+  "effects": [ { "type": "glow", "radius": 18, "intensity": 0.55, "color": "{c0}" } ],
+  "repeat_data": [
+    { "w": 1472, "c0": "#22d3ee", "c1": "#6366f1" },
+    { "w": 1088, "c0": "#6366f1", "c1": "#a855f7" },
+    { "w": 1248, "c0": "#a855f7", "c1": "#ec4899" },
+    { "w": 1536, "c0": "#ec4899", "c1": "#f59e0b" } ] },
+{ "type": "text", "id": "labels", "layer": 12, "time": 1.0, "duration": "end",
+  "x": 160, "y": { "expr": "360 + i * 170" }, "font_size": 28, "letter_spacing": 2,
+  "font_family": "Inter, sans-serif", "font_weight": 600, "fill_color": "#aab4d9",
+  "text": "{label}", "repeat_stagger": 0.4,
+  "animations": [ { "type": "fade-in", "time": "start", "duration": 0.4 } ],
+  "repeat_data": [ { "label": "HOURS WATCHED" }, { "label": "NEW SUBSCRIBERS" },
+    { "label": "TITLES ADDED" }, { "label": "AVG. RATING" } ] }
+\`\`\`
+
+Track and bar share x/y/height/border_radius; bar target \`w\` = fraction of
+track width (1472 = 92% of 1600). Bare \`w\`/\`c0\` bind inside exprs; \`{c0}\`
+substitutes in strings — even inside nested gradient stops.
+
+## Gotchas
+
+- One flipbook element per counter: an element can't repeat in two dimensions,
+  so counters never merge into the bar/label sets.
+- Right-anchor counters (\`"x_anchor": "100%"\`): row width varies, anchoring
+  pins the number to the column edge instead of jittering.
+- Forget the final \`"duration": "end"\` row and the number vanishes mid-video.
+- Copy k starts at element \`time\` + k * stagger. Use the SAME stagger on bars
+  and labels (0.4 here) so each row arrives as a unit; start values when their
+  bar starts, not when it lands.
+- Land everything well before root \`duration\` so the end frame holds calm.
+`;
+
+export const PATTERN_CINEMATIC_UI_CONTENT = `# Pattern card: cinematic-ui
+
+**When to use:** product-launch hero shots — a faked app/dashboard panel
+presented cinematically: slow camera push-in + tilt, z-depth parallax, light
+sweep, wordmark reveal. Chrome/typing idioms: ui-screencast.
+
+## Camera rig + depth planes
+
+Root \`camera\` pose fields take keyframe arrays (\`origin_*\` static-only,
+default center). Camera does the DOLLY ONLY — keep it level; negative
+camera \`x_rotation\` can drop a clip-group's children (empty slab).
+
+\`\`\`json
+{ "camera": { "perspective": 1500,
+  "z": [{"time":0.4,"value":0},{"time":6.4,"value":200,"easing":"ease-in-out-sine"}] } }
+\`\`\`
+
+The tilt goes on the PANEL GROUP as \`keyframe_animations\` tracks. Element
+semantics: POSITIVE \`x_rotation\` = top leans BACK (the popular product
+tilt); small positive \`y_rotation\` angles it to the side. Rake big, settle
+near-flat but OFF 0:
+
+\`\`\`json
+"keyframe_animations": [
+  {"property":"x_rotation","keyframes":[{"time":0.4,"value":18},{"time":6.4,"value":2.5,"easing":"ease-in-out-sine"}]},
+  {"property":"y_rotation","keyframes":[{"time":0.4,"value":10},{"time":6.4,"value":1.5,"easing":"ease-in-out-sine"}]}]
+\`\`\`
+
+2-3 depth planes via \`z\`: backdrop glows z -150 (oversized radial-gradient
+falloff, no blur), panel group z 0, wordmark + bokeh z 60, vignette z 90
+(multiply radial, clear center, top). Camera draw order =
+back-to-front by z (ties keep layer order); a plane scales by
+p/(p - z - dolly) — far barely moves, near leads. Dolly
+magnifies away from origin; pre-place fg text to survive full push.
+
+## The panel: one clip group
+
+A \`clip: true\` group with \`border_radius\` IS the window; children use LOCAL
+coords (origin = group top-left), own layer order. Chrome, cards, chart =
+rects + repeat rows; bars grow upward via \`y_anchor "100%"\` + height expr.
+Entrance: fade-in preset + a scale 0.965 -> 1 track on the group.
+
+\`\`\`json
+{ "type": "group", "layer": 4, "z": 0, "duration": "end",
+  "x": 960, "y": 400, "x_anchor": "50%", "y_anchor": "50%", "width": 1240, "height": 680,
+  "clip": true, "border_radius": 24,
+  "elements": [
+    {"type":"shape","layer":1,"duration":"end","width":1240,"height":680,"fill_color":"#0d1220"},
+    { "type": "shape", "shape": "ellipse", "layer": 2, "duration": "end", "y": 21, "width": 12, "height": 12,
+      "x": {"expr":"26 + i * 22"}, "fill_color": "{c}",
+      "repeat_data": [{"c":"#ff5f57"},{"c":"#febc2e"},{"c":"#28c840"}] },
+    { "type": "shape", "layer": 3, "time": 1.15, "duration": "end", "y": 476, "y_anchor": "100%",
+      "x": {"expr":"300 + i * 75"}, "width": 44, "border_radius": 6, "fill_color": "#4f8cff",
+      "height": {"expr":"ease(t,0,0.8,0,h)"}, "repeat_stagger": 0.07,
+      "repeat_data": [{"h":64},{"h":120},{"h":196}] }] }
+\`\`\`
+
+Groups have no \`shadow\`: pair a same-size rounded rect beneath (same z,
+lower layer) — and give it the SAME rotation tracks as the panel, or it
+shows as a flat box behind the tilt.
+
+## Light sweep + wordmark
+
+ONE sweep: a rotated screen-blend rect INSIDE the panel group (the clip
+crops it); softness from a transparent→white→transparent gradient, NOT
+blur; an x track moves it, an opacity track fades its ends.
+
+\`\`\`json
+{ "type": "shape", "layer": 21, "time": 2.6, "duration": 2,
+  "x_anchor": "50%", "y_anchor": "50%", "width": 380, "height": 1500, "rotation": 16,
+  "blend_mode": "screen",
+  "gradient": { "type": "linear", "angle": 90, "stops": [
+    {"offset":0,"color":"rgba(223,233,255,0)"},{"offset":0.5,"color":"rgba(223,233,255,0.4)"},
+    {"offset":1,"color":"rgba(223,233,255,0)"}] },
+  "keyframe_animations": [{ "property": "x", "keyframes": [
+    {"time":0,"value":-300},{"time":1.8,"value":1560,"easing":"ease-in-out-sine"}] }] }
+\`\`\`
+
+Wordmark on the fg plane after the dolly settles: glow + blur-settle +
+opacity track (+ a spring scale 0.9 -> 1 track).
+
+\`\`\`json
+{ "type": "text", "layer": 6, "z": 60, "time": 5.4, "duration": "end",
+  "x": 960, "y": 765, "x_anchor": "50%", "y_anchor": "50%", "text": "MERIDIAN",
+  "font_weight": 800, "font_size": 88,
+  "effects": [{"type":"glow","radius":26,"intensity":0.55,"color":"#7fa8ff"}],
+  "blur_radius": [{"time":0,"value":12},{"time":0.8,"value":0,"easing":"ease-out-cubic"}],
+  "keyframe_animations": [{ "property": "opacity", "keyframes": [
+    {"time":0,"value":0},{"time":0.9,"value":1,"easing":"ease-out-cubic"}] }] }
+\`\`\`
+
+## Tracks, not bare arrays
+
+BARE keyframe arrays on element x/y/width/height/opacity/scale/rotation
+silently hold the static value — use \`keyframe_animations\`, presets, or
+exprs. Bare arrays DO animate camera + filter fields (blur/brightness).
+
+## Render budget (critical)
+
+- Safe envelope: ONE camera, <=2 lights, ONE glass surface, ONE particle
+  emitter, blur_radius on <=3 elements. A schema-VALID comp past it
+  timed out at the 300s render cap (this card's demo renders in 11s).
+- ~12+ per-element blur_radius in one frame exports BLACK, silently. Prefer
+  gradient-alpha softness, glow, screen-blend sheens.
+- \`motion_blur\` multiplies cost by \`samples\`; add last. Keep 3D rotations
+  off exact 0 — settling AT 0 can drop a group's children (18 -> 2.5 here;
+  under ~2.5 degrees at rest reads as flat anyway).
+- End-card text goes BELOW the panel: raise/shrink the panel so the
+  wordmark clears its bottom edge; keep the tagline >=140px off the canvas
+  bottom.
+`;
+
+export const PATTERN_UI_SCREENCAST_CONTENT = `# Pattern card: ui-screencast
+
+**When to use:** faked app/product UI — chat apps, editors, panels — with
+typing, cursor travel, clicks, message sends. Loads alongside the core card.
+
+## Window chrome from shape rows
+
+Butt plain rects edge-to-edge on low layers (sidebar 320, header 72;
+hairline = 1px rect); repeated furniture = one element + repeat rows. Center
+row text via the row's box + \`"vertical_align": "middle"\`, never
+hand-computed baselines.
+
+\`\`\`json
+[{"type":"shape","layer":1,"duration":"end","width":320,"height":1080,"fill_color":"#1a1917"},
+  { "type": "text", "layer": 2, "duration": "end", "x": 32, "font_size": 15, "fill_color": "{c}", "text": "{r}",
+    "y": {"expr":"199 + i * 46"},
+    "repeat_data": [{"r":"Video projects","c":"#ece9e3"},{"r":"Launch plan","c":"#9c988f"}] }]
+\`\`\`
+
+## State transitions (three HARD rules)
+
+A screencast is a state machine: every UI state is its OWN element with an
+explicit time/duration window, and states hand off by ENDING. Windows are
+inclusive at both ends — butt-joined states double-draw on the shared frame
+— so end each state 0.001s early.
+
+**1. The placeholder ENDS exactly when typing starts.** Typed text and
+placeholder share one box and must never coexist:
+
+\`\`\`json
+[{ "type": "text", "layer": 22, "time": 0, "duration": 0.999, "text": "Message Atlas...",
+    "x": 672, "y": 904, "width": 900, "height": 132, "vertical_align": "middle", "font_size": 24, "fill_color": "#75726b" },
+  { "type": "text", "layer": 23, "x": 672, "y": 904, "width": 900, "height": 132, "vertical_align": "middle", "font_size": 24, "fill_color": "#f2efe9",
+    "repeat_data": [{"text":"L|","time":1.0,"duration":0.099},{"text":"Le|","time":1.1,"duration":0.099},
+      {"text":"Let's make a video|","time":1.2,"duration":3.399}] }]
+\`\`\`
+
+Typing = a flipbook of growing prefixes (caret \`|\` baked in, one row per
+keystroke, 0.1s step, 0.099 duration). The LAST row ENDS at the send moment
+(the input clears); re-enter the placeholder as a NEW element (time 4.6,
+duration "end", fade-in).
+
+**2. The empty state ENDS the moment the first message sends.** Center
+logo/greeting get \`duration\` = send time, opacity fading out just before:
+
+\`\`\`json
+{ "type": "text", "layer": 18, "time": 0, "duration": 4.6, "x": 560, "y": 388, "width": 1120,
+  "text_align": "center", "font_size": 40, "fill_color": "#ece9e3", "text": "How can I help you today?",
+  "keyframe_animations": [{ "property": "opacity", "keyframes": [
+    {"time":0,"value":0},{"time":0.9,"value":1},
+    {"time":4.15,"value":1},{"time":4.5,"value":0,"easing":"ease-in-cubic"}] }] }
+\`\`\`
+
+**3. Message bubbles anchor inside the conversation column ONLY.** Derive
+the column from the chrome: sidebar 320 + centered 1080 input => column
+x 580..1660; header 72, input top 904 => bubble y in (72, 904). Right-anchor
+user bubbles to the column edge; never let x/y default — 0,0 is the nav
+corner:
+
+\`\`\`json
+{ "type": "shape", "layer": 28, "time": 4.6, "duration": "end", "x": 1660, "x_anchor": "100%", "y": 600,
+  "width": 356, "height": 72, "border_radius": 22, "fill_color": "#35322b",
+  "animations": [{"type":"fade-in","time":"start","duration":0.25},
+    {"type":"slide-up-in","time":"start","duration":0.35,"distance":28,"easing":"ease-out-cubic"}] }
+\`\`\`
+
+## Cursor travel + click
+
+A \`position\` track with tangents bows the path (real mice arc); click = a
+scale-dip track recovering ease-out-back, echoed on the button with a
+brightness flash (bare array ok — filter field) + an expanding ripple.
+Assistant side: a typing-dots bubble (3-ellipse repeat, \`sin\` exprs
+phase-lagged by i) swaps into the reply bubble — rule-1 handoff again.
+
+\`\`\`json
+{ "type": "shape", "layer": 34, "duration": "end", "width": 34, "height": 34, "view_box": [0, 0, 24, 24],
+  "paths": [{"d":"M5 3 L5 20 L9.5 15.8 L12.6 22.2 L15.1 21 L12 14.8 L18.4 14.8 Z","fill":"#f7f5f1"}],
+  "keyframe_animations": [
+    { "property": "position", "keyframes": [
+      {"time":2.9,"value":[1250,800],"easing":"ease-in-out-cubic","out_tangent":[200,-140]},
+      {"time":4.1,"value":[1595,962],"easing":"ease-in-out-cubic","in_tangent":[-170,70]}] },
+    { "property": "scale", "keyframes": [{"time":4.22,"value":1},
+      {"time":4.32,"value":0.82,"easing":"ease-out-quad"},{"time":4.46,"value":1,"easing":"ease-out-back"}] }] }
+\`\`\`
+
+## Gotchas
+
+- BARE keyframe arrays on element x/y/width/height/opacity/scale/rotation
+  silently hold the static value — animate those with keyframe_animations
+  tracks, presets, or exprs (bare arrays work on filter + camera fields).
+- Beat chain: type -> travel -> click -> send -> bubble -> dots -> reply;
+  stagger element \`time\`s — keyframes read from the element's own start.
 `;
 

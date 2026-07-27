@@ -8,7 +8,15 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { OUTPUT_FORMATS, ELEMENT_TYPES, validate } from '@clipkit/protocol';
 import { lintSource, describe, unknownKeys, unknownElementKeys, droppedKeys } from '@clipkit/lint';
-import { AGENTS_MD, PROTOCOL_MD, BRAND_MD, CARD_MD } from './embedded-docs.js';
+import {
+  AGENTS_MD,
+  PROTOCOL_MD,
+  BRAND_MD,
+  CARD_MD,
+  PATTERN_DATA_VIZ_MD,
+  PATTERN_CINEMATIC_UI_MD,
+  PATTERN_UI_SCREENCAST_MD,
+} from './embedded-docs.js';
 import { SOURCE_SCHEMA_JSON, elementSchemaJson } from './schema-json.js';
 import { toCaptionWords } from '@clipkit/speech-to-text/caption';
 // NB: `@clipkit/speech-to-text/node` (the Whisper transcriber) is imported
@@ -350,19 +358,39 @@ export function registerTools(
       title: 'Read the Clipkit authoring docs',
       annotations: { readOnlyHint: true },
       description:
-        'Return a canonical Clipkit doc as text. topic "agents" = the authoring guide (schema cheat ' +
-        'sheet, pattern catalog, recipes, guidance — read this BEFORE composing); "protocol" = the ' +
-        'formal field spec; "brand" = brand reference; "card" = the ~8KB compact authoring card — ' +
-        'the recommended context for authoring (fetch "agents" only when the card doesn\'t cover a need). ' +
-        '(Same docs offered as MCP resources, exposed ' +
-        'as a tool so you can read them directly — resources are not always model-readable.)',
+        'Return a canonical Clipkit doc as text. topic "card" = the ~8KB compact authoring card — ' +
+        'the recommended context for authoring; "pattern-data-viz" / "pattern-cinematic-ui" / ' +
+        '"pattern-ui-screencast" = ~4-5KB archetype pattern cards (proven idioms: count-ups and bar ' +
+        'rows; product hero shots with camera rigs; faked app UI with typing/cursor/clicks) — load ' +
+        'ONE alongside the card when the brief matches its archetype; "agents" = the full authoring ' +
+        'guide (fetch only when the card doesn\'t cover a need); "protocol" = the formal field spec; ' +
+        '"brand" = brand reference. (Same docs offered as MCP resources, exposed as a tool so you ' +
+        'can read them directly — resources are not always model-readable.)',
       inputSchema: {
-        topic: z.enum(['agents', 'protocol', 'brand', 'card']).optional().describe('Which doc. Default "agents".'),
+        topic: z
+          .enum([
+            'agents',
+            'protocol',
+            'brand',
+            'card',
+            'pattern-data-viz',
+            'pattern-cinematic-ui',
+            'pattern-ui-screencast',
+          ])
+          .optional()
+          .describe('Which doc. Default "agents".'),
       },
     },
     async ({ topic }) => {
       const t = topic ?? 'agents';
-      const doc = t === 'card' ? CARD_MD : t === 'protocol' ? PROTOCOL_MD : t === 'brand' ? BRAND_MD : AGENTS_MD;
+      const doc =
+        t === 'card' ? CARD_MD
+        : t === 'pattern-data-viz' ? PATTERN_DATA_VIZ_MD
+        : t === 'pattern-cinematic-ui' ? PATTERN_CINEMATIC_UI_MD
+        : t === 'pattern-ui-screencast' ? PATTERN_UI_SCREENCAST_MD
+        : t === 'protocol' ? PROTOCOL_MD
+        : t === 'brand' ? BRAND_MD
+        : AGENTS_MD;
       return { content: [{ type: 'text', text: doc }] };
     },
   );

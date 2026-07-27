@@ -26,7 +26,7 @@ import { renderTextElement } from './element-renderers/text.js';
 import { renderVideoElement } from './element-renderers/video.js';
 import { applyAnimation, applyAspectRatio, depthOrder, resolve3D, resolveScalePair } from './resolve.js';
 import { applyModelTransform, mat4Multiply } from './mat4.js';
-import { normalizeWalk } from './repeat.js';
+import { adoptSetScope, normalizeWalk } from './repeat.js';
 import { resolveAnchor, resolveLength } from './unit.js';
 import { anchorToCenter, quadMatrix3D } from './transform.js';
 import type { GroupClipTarget, RenderContext } from './render-context.js';
@@ -422,6 +422,9 @@ function renderLayeredElement(
     effects: undefined,
     blend_mode: undefined,
   } as Element;
+  // The clone must keep the element's generated-set scope (i/n/row vars) or
+  // exprs inside the effect pass resolve against the base element.
+  adoptSetScope(inner, element);
   // Glass (§4.7) AND piecewise blend modes (§4.5) read the BACKDROP —
   // snapshot the surface now, while it holds exactly the pixels drawn
   // before this element, and before any scratch targets are pushed.

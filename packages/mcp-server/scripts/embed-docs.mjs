@@ -20,6 +20,9 @@ const docs = [
   { name: 'PROTOCOL_MD', path: 'PROTOCOL.md' },
   { name: 'BRAND_MD', path: 'BRAND.md' },
   { name: 'CARD_MD', path: 'CARD.md' },
+  { name: 'PATTERN_DATA_VIZ_MD', path: 'patterns/data-viz.md' },
+  { name: 'PATTERN_CINEMATIC_UI_MD', path: 'patterns/cinematic-ui.md' },
+  { name: 'PATTERN_UI_SCREENCAST_MD', path: 'patterns/ui-screencast.md' },
 ];
 
 const out = [];
