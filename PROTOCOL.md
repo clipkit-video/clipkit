@@ -2560,7 +2560,11 @@ ZWJ sequences render as single glyphs). Color glyphs carry their own
 colors and are composited untinted; `fill_color`/`gradient` apply to
 monochrome glyphs only. Rendering a given script or emoji still
 requires a font for it on the host (the reference render container
-ships a color-emoji font).
+ships a color-emoji font). Emoji ARTWORK is vendor-specific — the same
+codepoint draws differently under Apple Color Emoji (macOS preview)
+vs Noto Color Emoji (the reference cloud renderer). For byte-stable
+artwork across hosts, register an emoji font in `fonts[]` (with
+`unicode_range`) so every environment rasterizes the same set.
 
 ### 12.4. Particle PRNG
 
