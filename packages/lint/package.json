@@ -1,9 +1,13 @@
 {
   "name": "@clipkit/lint",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Protocol-aware soft checks and plain-language summaries for Clipkit Sources. Shared by the CLI and the MCP server.",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/lint" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clipkit-video/clipkit.git",
+    "directory": "packages/lint"
+  },
   "homepage": "https://clipkit.dev",
   "bugs": "https://github.com/clipkit-video/clipkit/issues",
   "type": "module",

@@ -65,12 +65,13 @@ export function renderGroupElement(el: GroupElement, ctx: RenderContext): void {
   // (plain path) or project their flattened layer's quad (clip/mask).
   const t3d = resolve3D(el, ctx);
 
-  // Render children in descending `layer` order (local paint order,
-  // layer 1 on top). The plain-group path below re-orders by depth
-  // (`z`) when ctx.depthSort is set; the flattened layer keeps this
-  // layer order (its children are coplanar in the flat layer).
+  // Render children in ascending `layer` order (local paint order,
+  // highest layer on top — CSS z-index model). The plain-group path
+  // below re-orders by depth (`z`) when ctx.depthSort is set; the
+  // flattened layer keeps this layer order (its children are coplanar
+  // in the flat layer).
   const sortedChildren = [...normalizeWalk(el.elements, ctx.styles as never)].sort(
-    (a, b) => numberOr(b.layer, Number.MAX_SAFE_INTEGER) - numberOr(a.layer, Number.MAX_SAFE_INTEGER),
+    (a, b) => numberOr(a.layer, Number.MIN_SAFE_INTEGER) - numberOr(b.layer, Number.MIN_SAFE_INTEGER),
   );
 
   const dispatch = (ctx as RenderContext & { _dispatch?: (el: Element, ctx: RenderContext) => void })
@@ -119,7 +120,7 @@ export function renderGroupElement(el: GroupElement, ctx: RenderContext): void {
           ctx.surfaceWidth = width;
           ctx.surfaceHeight = height;
           const ordered = [...elements].sort(
-            (a, b) => numberOr(b.layer, Number.MAX_SAFE_INTEGER) - numberOr(a.layer, Number.MAX_SAFE_INTEGER),
+            (a, b) => numberOr(a.layer, Number.MIN_SAFE_INTEGER) - numberOr(b.layer, Number.MIN_SAFE_INTEGER),
           );
           for (const child of ordered) {
             if (child.visible === false) continue;

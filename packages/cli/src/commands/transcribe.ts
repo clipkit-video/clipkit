@@ -29,7 +29,7 @@ export function transcribeCommand(program: Command): void {
     .option('-l, --language <code>', 'force a language (e.g. en); default auto-detect')
     .option('-o, --out <file>', 'write JSON here (default: stdout)')
     .option('-e, --element', 'emit a full caption element instead of just words[]')
-    .option('-t, --layer <n>', 'layer for --element (lower = nearer front)', '3')
+    .option('-t, --layer <n>', 'layer for --element (higher = nearer front)', '999')
     .action(async (file: string, opts: Opts) => {
       const log = (s: string): void => void process.stderr.write(s);
       log(`transcribing ${file} (${opts.model})…\n`);
@@ -48,7 +48,7 @@ export function transcribeCommand(program: Command): void {
       log(`  ${words.length} words, ${result.duration.toFixed(1)}s\n`);
 
       const payload = opts.element
-        ? { type: 'caption', time: 0, layer: Number(opts.layer) || 3, words }
+        ? { type: 'caption', time: 0, layer: Number(opts.layer) || 999, words }
         : words;
       const json = JSON.stringify(payload, null, 2);
       if (opts.out) {

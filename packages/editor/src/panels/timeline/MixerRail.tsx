@@ -120,7 +120,8 @@ export function MixerRail({
       g.els.push(el);
       g.ids.push(el.id!);
     }
-    return [...byLayer.values()].sort((a, b) => a.layer - b.layer);
+    // Front-most (highest layer) strip first, matching the timeline's top row.
+    return [...byLayer.values()].sort((a, b) => b.layer - a.layer);
   }, [audioEls]);
 
   // Effective preview gains: any solo ⇒ everything non-solo is silent;

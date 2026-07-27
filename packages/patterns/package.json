@@ -1,9 +1,13 @@
 {
   "name": "@clipkit/patterns",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Authoring-time pattern library for Clipkit — composable motion-graphics units that emit primitive Source elements.",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/patterns" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clipkit-video/clipkit.git",
+    "directory": "packages/patterns"
+  },
   "homepage": "https://clipkit.dev",
   "bugs": "https://github.com/clipkit-video/clipkit/issues",
   "type": "module",

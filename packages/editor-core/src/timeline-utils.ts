@@ -44,30 +44,31 @@ export function elementLabel(el: Element): string {
   return el.type;
 }
 
-// ── Layout: list used layers (ascending — layer 1 is the top row / on top) ──
+// ── Layout: list used layers (descending — the highest layer is the top row / on top) ──
 
 export function listUsedLayers(source: Source): number[] {
   const set = new Set<number>();
   for (const el of source.elements) set.add(elementLayer(el));
-  return Array.from(set).sort((a, b) => a - b);
+  return Array.from(set).sort((a, b) => b - a);
 }
 
 // ── Edit-time layer invariant (correct-by-construction; NOT a load normalize) ──
 
-/** A container's elements sorted FRONT-TO-BACK (layer ascending; layer 1 = front). */
+/** A container's elements sorted FRONT-TO-BACK (layer descending; the highest layer = front). */
 export function byLayer<T extends Element>(elements: readonly T[]): T[] {
-  return [...elements].sort((a, b) => elementLayer(a) - elementLayer(b));
+  return [...elements].sort((a, b) => elementLayer(b) - elementLayer(a));
 }
 
 /**
  * Stamp dense, unique `layer` values onto a container from its desired
- * FRONT-TO-BACK order: index 0 → layer 1 (front / on top), last → layer N.
+ * FRONT-TO-BACK order: index 0 → layer N (front / on top), last → layer 1.
  * Run on add / reorder / delete so the editor always writes valid, uniquely
  * layered sources — correct-by-construction at edit time, NOT a load pass.
  * Returns new element objects (all other fields untouched).
  */
 export function reassignLayers<T extends Element>(frontToBack: readonly T[]): T[] {
-  return frontToBack.map((el, i) => ({ ...el, layer: i + 1 }));
+  const n = frontToBack.length;
+  return frontToBack.map((el, i) => ({ ...el, layer: n - i }));
 }
 
 // ── Snap math ──────────────────────────────────────────────────────

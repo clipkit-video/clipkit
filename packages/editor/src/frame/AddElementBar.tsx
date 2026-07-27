@@ -62,7 +62,7 @@ export function AddElementBar() {
 
   const ctx = () => {
     const time = Math.max(0, playhead);
-    // layer is assigned on add — the store places new elements on top (layer 1).
+    // layer is assigned on add — the store places new elements on top (the highest layer).
     return { time, layer: 1, cx: compW / 2, cy: compH / 2 };
   };
   const center = { x_anchor: '50%' as const, y_anchor: '50%' as const };

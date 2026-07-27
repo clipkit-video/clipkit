@@ -1027,7 +1027,7 @@ export function registerTools(
           path: z.string().optional().describe('Local path to an audio/video file (Claude Desktop / local servers). Use this OR url.'),
           model: z.string().optional().describe("Whisper model id. Default 'Xenova/whisper-base'. Use '…-tiny.en' for speed, '…-small' for accuracy."),
           language: z.string().optional().describe('Force a language code (e.g. "en"); omit to auto-detect.'),
-          layer: z.number().int().optional().describe('Layer for the caption element (lower = nearer front, layer 1 on top). Default 3.'),
+          layer: z.number().int().optional().describe('Layer for the caption element (higher = nearer front, the highest layer is on top). Default 999 so captions sit above scene content; if the project already stacks that high, the caption goes one above its top layer instead.'),
           add: z.boolean().optional().describe('Add the caption to the current project. Default true.'),
           project_id: projectIdField,
         },
@@ -1063,13 +1063,22 @@ export function registerTools(
         if (words.length === 0) {
           return { isError: true, content: [{ type: 'text', text: 'No speech detected in the file.' }] };
         }
-        const element = { type: 'caption', time: 0, layer: args.layer ?? 3, words };
+        const element = { type: 'caption', time: 0, layer: args.layer ?? 999, words };
 
         let note = '';
         if (args.add !== false) {
           const p = await openProject(store, args.project_id);
           if (!p.ok) {
             return { isError: true, content: [{ type: 'text', text: p.error }] };
+          }
+          if (args.layer == null) {
+            // Default 999 (above scene content); if the project already stacks
+            // that high, go one above its top layer (schema caps at 1000).
+            const maxLayer = Math.max(
+              0,
+              ...p.project.source.elements.map((e) => (typeof e.layer === 'number' ? e.layer : 0)),
+            );
+            if (maxLayer >= 999) element.layer = Math.min(1000, maxLayer + 1);
           }
           const trial = cloneSource(p.project.source);
           trial.elements.push(element as never);

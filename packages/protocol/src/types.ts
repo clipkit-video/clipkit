@@ -647,12 +647,13 @@ export interface BaseElement {
   name?: string;
   type: ElementType;
   /**
-   * Paint order within the element's container, like an After Effects
-   * layer: each element owns a UNIQUE `layer` integer in 1..1000 and
-   * LOWER numbers draw in front (layer 1 is on top). Required. `z`
-   * (depth) takes precedence; `layer` orders elements within equal
-   * depth. Unique per container (top-level `elements`, each group's
-   * `elements`, each group mask's `elements`).
+   * Paint order within the element's container, like CSS z-index:
+   * each element owns a UNIQUE `layer` integer in 1..1000 and HIGHER
+   * numbers draw in front (the highest layer is on top; backgrounds
+   * go at layer 1). Agrees with `z` (higher = closer to the viewer).
+   * Required. `z` (depth) takes precedence; `layer` orders elements
+   * within equal depth. Unique per container (top-level `elements`,
+   * each group's `elements`, each group mask's `elements`).
    */
   layer: number;
   time?: number | string;

@@ -43,8 +43,8 @@ export function describe(s: Source): string {
   }
   if (layers.size) {
     out.push('');
-    out.push('Timeline (by layer, 1 = top/front):');
-    for (const ly of [...layers.keys()].sort((a, b) => a - b)) {
+    out.push('Timeline (by layer, top/front first — the highest layer is on top):');
+    for (const ly of [...layers.keys()].sort((a, b) => b - a)) {
       out.push(`  layer ${ly}`);
       const items = layers
         .get(ly)!

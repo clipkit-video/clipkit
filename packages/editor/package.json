@@ -1,9 +1,13 @@
 {
   "name": "@clipkit/editor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The Clipkit editor — one configurable, registry-driven editor over the Source schema. BASIC and ADVANCED ship as configurations of the same component tree (<Editor configuration={…}>), powered by @clipkit/editor-core.",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/clipkit-video/clipkit.git", "directory": "packages/editor" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clipkit-video/clipkit.git",
+    "directory": "packages/editor"
+  },
   "homepage": "https://clipkit.dev",
   "bugs": "https://github.com/clipkit-video/clipkit/issues",
   "type": "module",

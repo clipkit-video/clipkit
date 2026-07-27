@@ -207,14 +207,15 @@ export function createEditorStore(
         set((state) => {
           pushHistory(state);
           const els = state.source.elements as Element[];
-          // New elements (incl. duplicates) go ON TOP — layer 1 — and the
-          // existing siblings renumber to 2..N+1 so the container stays
-          // uniquely layered. Correct-by-construction at EDIT time (not a
-          // load-time normalize); element array order is preserved.
+          // New elements (incl. duplicates) go ON TOP — the highest layer —
+          // and the existing siblings renumber to 1..N (back-to-front) so
+          // the container stays uniquely layered. Correct-by-construction
+          // at EDIT time (not a load-time normalize); element array order
+          // is preserved.
           [...els]
             .sort((a, b) => elementLayer(a) - elementLayer(b))
-            .forEach((el, i) => { el.layer = i + 2; });
-          element.layer = 1;
+            .forEach((el, i) => { el.layer = i + 1; });
+          element.layer = els.length + 1;
           els.push(element);
           if (element.id) state.selection = [element.id];
           alignSourceDuration(state);

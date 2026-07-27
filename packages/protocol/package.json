@@ -1,6 +1,6 @@
 {
   "name": "@clipkit/protocol",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "The Clipkit Protocol — types, runtime validation, and spec for the Clipkit video runtime. Implementations target this package.",
   "license": "Apache-2.0",
   "repository": {

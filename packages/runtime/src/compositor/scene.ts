@@ -43,14 +43,15 @@ export function renderSourceFrame(source: Source, ctx: RenderContext): void {
   // can't import this file without a cycle) can recurse into children.
   (ctx as RenderContext & { _dispatch?: typeof dispatchElement })._dispatch = dispatchElement;
 
-  // Draw order: descending `layer` so the HIGHEST layer draws first
-  // (farthest back) and layer 1 draws last (on top) — the After Effects
-  // model. Array.prototype.sort is stable, so any elements that share a
+  // Draw order: ascending `layer` so the LOWEST layer draws first
+  // (farthest back) and the highest layer draws last (on top) — the CSS
+  // z-index model, agreeing with `z` (higher = closer to the viewer).
+  // Array.prototype.sort is stable, so any elements that share a
   // layer keep definition order. Then (§4.4.3) the list is re-ordered
   // back-to-front by depth (`z`); equal depths keep this layer order.
   // With all z = 0 this is pure layer order.
   ctx.styles = source.styles as RenderContext['styles'];
-  let ordered = [...normalizeWalk(source.elements, source.styles)].sort((a, b) => layerOf(b) - layerOf(a));
+  let ordered = [...normalizeWalk(source.elements, source.styles)].sort((a, b) => layerOf(a) - layerOf(b));
   if (ctx.depthSort) ordered = depthOrder(ordered, ctx);
 
   for (const element of ordered) {
@@ -69,10 +70,10 @@ export function renderSourceFrame(source: Source, ctx: RenderContext): void {
 
 function layerOf(el: Element): number {
   // `layer` is required + validated; this fallback only guards malformed
-  // live state. Missing → far back (drawn first) under the descending
+  // live state. Missing → far back (drawn first) under the ascending
   // sort, matching the old "missing track = back" behavior.
   if (typeof el.layer === 'number' && Number.isFinite(el.layer)) return el.layer;
-  return Number.MAX_SAFE_INTEGER;
+  return Number.MIN_SAFE_INTEGER;
 }
 
 function dispatchElement(element: Element, ctx: RenderContext): void {

@@ -73,9 +73,9 @@ export function promo(opts: PromoOptions): Source {
         canvasHeight: H,
         time,
         duration: scene.duration,
-        // Later scenes sit in FRONT (lower layer) so a crossfade dissolves
+        // Later scenes sit in FRONT (higher layer) so a crossfade dissolves
         // INTO the incoming scene. Unique 1..N across the scene list.
-        layer: opts.scenes.length - i,
+        layer: i + 1,
       }),
     );
     cursor = time + scene.duration;

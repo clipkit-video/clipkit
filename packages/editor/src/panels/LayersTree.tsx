@@ -36,12 +36,12 @@ export function LayersTree() {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
 
-  // Topmost first: layer ascending (layer 1 = front/on top), array order as tiebreak.
+  // Topmost first: layer descending (the highest layer = front/on top), array order as tiebreak.
   const top = useMemo(
     () =>
       [...source.elements].sort(
         (a, b) =>
-          elementLayer(a) - elementLayer(b) ||
+          elementLayer(b) - elementLayer(a) ||
           source.elements.indexOf(a) - source.elements.indexOf(b),
       ),
     [source],

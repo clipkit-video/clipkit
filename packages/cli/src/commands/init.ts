@@ -128,7 +128,7 @@ const source: Source = {
     {
       id: 'bg',
       type: 'shape',
-      layer: 2,
+      layer: 1,
       time: 0,
       duration: 6,
       shape: 'rectangle',
@@ -143,7 +143,7 @@ const source: Source = {
     {
       id: 'title',
       type: 'text',
-      layer: 1,
+      layer: 2,
       time: 0.4,
       duration: 5.6,
       text: 'Hello, Clipkit',

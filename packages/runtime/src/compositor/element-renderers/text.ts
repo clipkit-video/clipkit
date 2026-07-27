@@ -1378,7 +1378,13 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
   const { canvas, backend, maskedTexts } = ctx;
   const elementStart = ctx.timeOffset + numberOr(element.time, 0);
   const localTime = ctx.time - elementStart;
-  const text = resolveText(element, localTime);
+  // Spans take this path too when combined with mask/stroke/gradient: the
+  // runs are rasterized left-to-right with per-span styling, then the same
+  // mask compositing applies to the combined line.
+  const spans = element.spans && element.spans.length > 0 ? element.spans : null;
+  const text = spans
+    ? spans.map((s) => String(s.text ?? '')).join('')
+    : resolveText(element, localTime);
   if (text.length === 0) return;
 
   const fontFamily = withFontFallback(String(element.font_family ?? 'sans-serif'));
@@ -1406,13 +1412,47 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
 
   // Measure text once with a probe context. We need both the bounding box
   // and the actual ascent/descent so the canvas is sized correctly.
+  // With spans, each run is measured with its own font; the line box is the
+  // sum of run advances × the max ascent/descent across runs.
   const probe = getProbeContext();
   const fontSpec = `${fontStyle} ${fontWeight} ${fontSize * TEXT_SUPERSAMPLE}px ${fontFamily}`;
-  probe.font = fontSpec;
-  const metrics = probe.measureText(text);
-  const ascent = metrics.actualBoundingBoxAscent;
-  const descent = metrics.actualBoundingBoxDescent;
-  const textW = Math.max(1, Math.ceil(metrics.width));
+  let runs: { text: string; fontSpec: string; fill: string | undefined; width: number }[] | null = null;
+  let ascent: number, descent: number, textW: number;
+  if (spans) {
+    runs = spans.map((s) => {
+      const runFamily = withFontFallback(String(s.font_family ?? element.font_family ?? 'sans-serif'));
+      const runWeight = String(s.font_weight ?? element.font_weight ?? 'normal');
+      const runStyle = (s.font_style ?? element.font_style) === 'italic' ? 'italic' : 'normal';
+      const runSize = typeof s.font_size === 'number'
+        ? s.font_size
+        : typeof s.font_size === 'string'
+          ? resolveLength(s.font_size, canvas.height, canvas, fontSize)
+          : fontSize;
+      return {
+        text: String(s.text ?? ''),
+        fontSpec: `${runStyle} ${runWeight} ${runSize * TEXT_SUPERSAMPLE}px ${runFamily}`,
+        fill: typeof s.fill_color === 'string' ? s.fill_color : undefined,
+        width: 0,
+      };
+    });
+    ascent = 0; descent = 0;
+    let advance = 0;
+    for (const run of runs) {
+      probe.font = run.fontSpec;
+      const m = probe.measureText(run.text);
+      run.width = m.width;
+      advance += m.width;
+      ascent = Math.max(ascent, m.actualBoundingBoxAscent);
+      descent = Math.max(descent, m.actualBoundingBoxDescent);
+    }
+    textW = Math.max(1, Math.ceil(advance));
+  } else {
+    probe.font = fontSpec;
+    const metrics = probe.measureText(text);
+    ascent = metrics.actualBoundingBoxAscent;
+    descent = metrics.actualBoundingBoxDescent;
+    textW = Math.max(1, Math.ceil(metrics.width));
+  }
   const textH = Math.max(1, Math.ceil(ascent + descent));
 
   // Padding to avoid clipping AA fringes — and the stroke, which extends past
@@ -1458,23 +1498,35 @@ function renderMaskedTextElement(element: TextElement, ctx: RenderContext): void
     : (typeof element.stroke_color === 'string' ? element.stroke_color : '#ffffff');
   offCtx.lineJoin = 'round';
   offCtx.lineCap = 'round';
-  if (hasStroke && (element.stroke_align ?? 'outer') === 'outer') {
-    // Outer: stroke at 2× width FIRST, then the fill on top covers the inner
-    // half — leaving a clean stroke_width-wide outline outside the glyph.
-    offCtx.lineWidth = strokeWss * 2;
-    offCtx.strokeStyle = strokeStyle;
-    offCtx.strokeText(text, bx, by);
-    offCtx.fillStyle = fillStyle;
-    offCtx.fillText(text, bx, by);
-  } else {
-    offCtx.fillStyle = fillStyle;
-    offCtx.fillText(text, bx, by);
-    if (hasStroke) {
-      // center / inner ≈ a centered stroke drawn over the fill.
-      offCtx.lineWidth = strokeWss;
+  const drawRun = (runText: string, runFill: string | CanvasGradient, rx: number) => {
+    if (hasStroke && (element.stroke_align ?? 'outer') === 'outer') {
+      // Outer: stroke at 2× width FIRST, then the fill on top covers the inner
+      // half — leaving a clean stroke_width-wide outline outside the glyph.
+      offCtx.lineWidth = strokeWss * 2;
       offCtx.strokeStyle = strokeStyle;
-      offCtx.strokeText(text, bx, by);
+      offCtx.strokeText(runText, rx, by);
+      offCtx.fillStyle = runFill;
+      offCtx.fillText(runText, rx, by);
+    } else {
+      offCtx.fillStyle = runFill;
+      offCtx.fillText(runText, rx, by);
+      if (hasStroke) {
+        // center / inner ≈ a centered stroke drawn over the fill.
+        offCtx.lineWidth = strokeWss;
+        offCtx.strokeStyle = strokeStyle;
+        offCtx.strokeText(runText, rx, by);
+      }
     }
+  };
+  if (runs) {
+    let rx = bx;
+    for (const run of runs) {
+      offCtx.font = run.fontSpec;
+      drawRun(run.text, run.fill ?? fillStyle, rx);
+      rx += run.width;
+    }
+  } else {
+    drawRun(text, fillStyle, bx);
   }
   offCtx.restore();
 

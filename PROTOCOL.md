@@ -419,7 +419,7 @@ interface BaseElement {
   id?: string;
   name?: string;
   type: ElementType;           // discriminator
-  layer: number;               // REQUIRED, unique per container; 1..1000; LOWER draws in front (layer 1 = on top)
+  layer: number;               // REQUIRED, unique per container; 1..1000; HIGHER draws in front (highest layer = on top)
   time?: number | string;      // seconds
   duration?: number | string | "auto" | "end";
 
@@ -462,20 +462,21 @@ elements with a warning rather than failing the whole document.
 
 Every element owns a **`layer`** — a unique integer 1..1000 within its
 container (the top-level `elements`, each group's `elements`, each group
-mask's `elements`), like an After Effects layer. **Lower `layer` draws
-in front; layer 1 is on top.** Elements draw back-to-front by **depth**
+mask's `elements`), like CSS `z-index`. **Higher `layer` draws
+in front; the highest layer is on top (backgrounds go at layer 1).**
+Elements draw back-to-front by **depth**
 (`z`, §4.4), then by `layer`:
 
 ```
-draw_key  = (depth descending, i.e. farther first), then layer descending
-            (highest layer drawn first/behind, layer 1 drawn last/on top)
+draw_key  = (depth descending, i.e. farther first), then layer ascending
+            (layer 1 drawn first/behind, highest layer drawn last/on top)
 ```
 
 `z` is the single depth axis (§4.4.2): with no camera it is pure
 stacking order (no perspective), with a camera it additionally
 foreshortens. `layer` orders elements *within* equal depth — when depths
 are equal (e.g. a 2D document where every `z` is 0), draw order is
-exactly layer descending, so layer 1 ends up on top. `layer` is
+exactly layer ascending, so the highest layer ends up on top. `layer` is
 **required and unique per container** (duplicate layers are a validation
 error), so no two elements tie; the sort MUST nonetheless be stable. The
 same rule applies to a group's children, locally within the group.
@@ -516,7 +517,7 @@ Since CKP/1.0, every element also supports a 3D transform:
 | `z_rotation` | number (degrees) \| Keyframe[] | `0` | Rotation in the element's plane. Exact alias for `rotation` — authoring BOTH on one element MUST be rejected by validators. |
 | `x_rotation` | number (degrees) \| Keyframe[] | `0` | Rotation around the element's local x axis; positive tips the top edge away from the viewer. |
 | `y_rotation` | number (degrees) \| Keyframe[] | `0` | Rotation around the element's local y axis; positive turns the right edge away from the viewer. |
-| `z` | number (px) \| Keyframe[] | `0` | Depth toward (+) / away from (−) the viewer. The depth axis for §4.2 draw order: higher `z` draws nearer the viewer (on top), with `layer` ordering elements within equal depth (lower layer in front). Under a camera it additionally drives perspective foreshortening; with no camera it is pure stacking. |
+| `z` | number (px) \| Keyframe[] | `0` | Depth toward (+) / away from (−) the viewer. The depth axis for §4.2 draw order: higher `z` draws nearer the viewer (on top), with `layer` ordering elements within equal depth (higher layer in front). Under a camera it additionally drives perspective foreshortening; with no camera it is pure stacking. |
 
 All are animatable. The effective axis scales are
 `sx = scale × x_scale`, `sy = scale × y_scale`.
@@ -614,7 +615,7 @@ foreshortening — a y-rotated card narrows but its edges stay parallel).
 (§4.2, §4.4.3): `z` is the single depth axis, so without a camera it acts
 as pure stacking order. A document with no 3D fields (all `z = 0`) and no
 camera renders as pure layer stacking — equal depth collapses to `layer`
-order (descending, so layer 1 is on top).
+order (ascending, so the highest layer is on top).
 
 #### 4.4.3. Compositing under 3D (normative)
 
@@ -627,7 +628,7 @@ order (descending, so layer 1 is on top).
   it is the same ordering plus foreshortening. This is whole-card
   (per-element) 2.5D sorting — flat cards ordered by distance — NOT a
   per-pixel depth buffer. The sort is **stable**: equal depths break by
-  `layer` order (descending — layer 1 drawn last/on top), so a document
+  `layer` order (ascending — the highest layer drawn last/on top), so a document
   where every `z = 0` collapses to exact `layer` order, and the same
   Source always yields the same pixels. A flattened group (clip / mask / filters /
   effects) is a single card and sorts by its own anchor depth as a
@@ -1029,7 +1030,7 @@ play the orthographic path applies bit-for-bit.
 All numeric params are animatable. The pane's `fill_color` is unused
 under glass; its `opacity` scales the pane. An `ellipse` evaluates as
 the rounded-rect SDF with `r = min(half)` — a circle when square, a
-stadium otherwise. Pane content (labels, icons) goes on lower layers (nearer the front).
+stadium otherwise. Pane content (labels, icons) goes on higher layers (nearer the front).
 
 The model, NORMATIVE, evaluated per pixel in pane-local rotated
 coordinates `p` with half-size `half`, corner radius `r`, z-radius

@@ -261,10 +261,11 @@ export function elementRotation(el: Element): number {
 
 /**
  * Find the topmost element under a source-space point. Walks elements
- * in ascending layer order (layer 1 = rendered last = on top). Filters
- * to active + visual elements. For rotated elements, the hit point is
- * inverse-rotated into the element's local frame before the bounds
- * test. Composition recursion deferred to a later phase.
+ * in descending layer order (highest layer = rendered last = on top,
+ * so it is checked first). Filters to active + visual elements. For
+ * rotated elements, the hit point is inverse-rotated into the
+ * element's local frame before the bounds test. Composition recursion
+ * deferred to a later phase.
  */
 export function hitTest(
   elements: readonly Element[],
@@ -280,7 +281,7 @@ export function hitTest(
     .sort((a, b) => {
       const la = typeof a.layer === 'number' ? a.layer : 1;
       const lb = typeof b.layer === 'number' ? b.layer : 1;
-      return la - lb;
+      return lb - la;
     });
 
   for (const el of candidates) {

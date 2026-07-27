@@ -58,8 +58,9 @@ function sceneGroup(base: SceneBase, children: Element[]): Element {
     animations: [{ type: 'fade-out', time: 'end', duration: 0.5 }],
     // The composer owns layer assignment: `children` is built back-to-front
     // (frame behind, data pushed on top), so stamp dense layers with the
-    // front-most = layer 1. This overrides the builders' relative layerBase
-    // offsets with a correct, unique-per-container ordering (layer 1 = top).
+    // back-most = layer 1 and the front-most = layer N (highest = top).
+    // This overrides the builders' relative layerBase offsets with a
+    // correct, unique-per-container ordering.
     elements: assignLayers(children),
   };
 }

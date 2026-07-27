@@ -904,7 +904,7 @@ export function CanvasTimeline({
       if (d?.started) {
         // Vertical drag = reorder layers. The dragged element takes the slot the
         // insertion gap marks and every element it crossed shifts by one — so the
-        // container stays uniquely + densely layered (layer 1 = front). No
+        // container stays uniquely + densely layered (highest layer = front). No
         // collision, no "new lane" creation.
         if (d.mode === 'move') {
           const to = gap && gap.target > 0 ? gap.toLayer : undefined;

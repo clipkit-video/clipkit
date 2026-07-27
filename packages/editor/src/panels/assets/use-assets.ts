@@ -77,7 +77,7 @@ export function useAssets() {
     (asset: ClipkitAsset): string => {
       const id = `${asset.kind}-${(dropCounter++).toString(36)}`;
       const time = Math.max(0, playheadTime);
-      // layer is assigned on add — the store places new elements on top (layer 1).
+      // layer is assigned on add — the store places new elements on top (the highest layer).
       const base = { id, name: asset.name, time, layer: 1 };
 
       let el: Element;

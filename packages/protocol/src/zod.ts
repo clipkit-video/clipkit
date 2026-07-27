@@ -282,7 +282,7 @@ const materialSchema = z
 const baseElementFields = {
   id: z.string().optional(),
   name: z.string().optional(),
-  layer: z.number().int().min(1).max(1000).describe("The element's layer in the stack (1-1000), like an After Effects layer: each element has its own unique layer and LOWER numbers draw in front (layer 1 is on top). Within equal z-depth, layer is the draw order."),
+  layer: z.number().int().min(1).max(1000).describe("Stacking order like CSS z-index: HIGHER layer draws in front, backgrounds at layer 1. Unique int 1-1000 per container. Agrees with `z` (higher = closer to the viewer); within equal z-depth, layer is the draw order."),
   visible: z.boolean().optional(),
   time: numberOrString.describe('Element start time in seconds from composition start (default 0).').optional(),
   duration: z.union([z.number(), z.string(), z.literal('auto'), z.literal('end')]).describe('How long the element lasts: seconds, "auto" (its natural content/media length), or "end" (until the composition ends).').optional(),
@@ -772,7 +772,7 @@ const cameraSchema = z
     y_rotation: z.union([z.number(), z.array(keyframeSchema), exprSchema]).describe('Camera yaw in degrees (default 0).').optional(),
     z_rotation: z.union([z.number(), z.array(keyframeSchema), exprSchema]).describe('Camera roll in degrees (default 0).').optional(),
     // Compositing order under the camera (§4.4.3). Default 'depth'.
-    sort: z.enum(['depth', 'paint']).describe('Compositing order: "depth" (2.5D by z, default) or "paint" (fixed layer order, layer 1 on top).').optional(),
+    sort: z.enum(['depth', 'paint']).describe('Compositing order: "depth" (2.5D by z, default) or "paint" (fixed layer order, highest layer on top).').optional(),
   })
   .passthrough();
 
@@ -814,7 +814,7 @@ function checkElements(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [...path, i, 'layer'],
-        message: `duplicate layer ${layer} — each element in a container needs a unique layer (layer 1 = top); renumber the colliding elements`,
+        message: `duplicate layer ${layer} — each element in a container needs a unique layer (highest layer = top); renumber the colliding elements`,
       });
     }
   }
@@ -927,7 +927,7 @@ export const sourceSchema: z.ZodTypeAny = z
       ])
       .describe('Anti-banding output dither, DEFAULT ON. `true`/`false` or `{ enabled, amplitude, pattern }`. A global sub-LSB stipple so gradients/shadows/blur quantize to 8-bit without banding; deterministic. Distinct from the retro `dither` effect.')
       .optional(),
-    elements: z.array(elementSchema).min(1).describe('The scene content (at least one element); drawn by z-depth then layer order (layer 1 on top).'),
+    elements: z.array(elementSchema).min(1).describe('The scene content (at least one element); drawn by z-depth then layer order (highest layer on top).'),
   })
   .passthrough()
   .superRefine((src: Record<string, unknown>, ctx: z.RefinementCtx) => {

@@ -74,11 +74,11 @@ export interface TimelineLayout {
   pxPerSec: number;
 }
 
-/** Layers present, ascending — layer 1 (front/on top) is the first/top row. */
+/** Layers present, descending — the highest layer (front/on top) is the first/top row. */
 export function listLayers(source: { elements: readonly Element[] }): number[] {
   const set = new Set<number>();
   for (const el of source.elements) set.add(elementLayer(el));
-  return [...set].sort((a, b) => a - b);
+  return [...set].sort((a, b) => b - a);
 }
 
 const kfTime = (k: Keyframe): number =>
