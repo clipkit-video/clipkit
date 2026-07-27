@@ -11,7 +11,7 @@ import {
   type UnitRotation,
 } from '../../text/text-animation.js';
 import { interpolateKeyframes } from '../../animation/keyframes.js';
-import { atlasKey, generateFontAtlas, type FontAtlas } from '../../text/font-atlas.js';
+import { atlasKey, ensureAtlasGlyphs, generateFontAtlas, segmentGraphemes, type FontAtlas } from '../../text/font-atlas.js';
 import { autoFitFontSize, autoFitFontSizeBox, withFontFallback } from '../../text/measure.js';
 import { getLogger } from '../../logger.js';
 import type { MaskedTextAsset, RenderContext } from '../render-context.js';
@@ -116,6 +116,8 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
     atlas = generateFontAtlas({ family: fontFamily, size: fontSize, weight: fontWeight }, backend);
     ctx.fontAtlases.set(key, atlas);
   }
+  atlas = ensureAtlasGlyphs(atlas, backend, text);
+  ctx.fontAtlases.set(key, atlas);
 
   const localX = applyAnimation(element, 'x', resolveLength(element.x as never, canvas.width, canvas), ctx);
   const localY = applyAnimation(element, 'y', resolveLength(element.y as never, canvas.height, canvas), ctx);
@@ -188,7 +190,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
   const advanceOf = (s: string): number => {
     let w = 0;
     let prev = '';
-    for (const ch of s) {
+    for (const ch of segmentGraphemes(s)) {
       const g = atlas.glyphs.get(ch);
       if (g) {
         w += g.advance + letterSpacing + atlas.kern(prev, ch);
@@ -361,7 +363,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
       let cursorX = blockLeft + Math.max(0, contentWidth - lineWidths[li]!) * alignFrac;
       const baselineY = contentTop + li * lineBoxHeight + leadingTop + atlas.ascent;
       let pPrev = '';
-      for (const ch of lines[li]!) {
+      for (const ch of segmentGraphemes(lines[li]!)) {
         const isSpace = /\s/.test(ch);
         if (isSpace && pInWord) { pw += 1; pInWord = false; }
         else if (!isSpace) pInWord = true;
@@ -441,7 +443,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
   {
     let inW = false;
     for (const lineText of lines) {
-      for (const ch of lineText) {
+      for (const ch of segmentGraphemes(lineText)) {
         const isSpace = /\s/.test(ch);
         if (isSpace && inW) { wordCount += 1; inW = false; }
         else if (!isSpace) inW = true;
@@ -468,7 +470,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
     const baselineY = contentTop + li * lineBoxHeight + leadingTop + atlas.ascent;
     let prevCh = '';
 
-    for (const ch of lineText) {
+    for (const ch of segmentGraphemes(lineText)) {
     const isSpace = /\s/.test(ch);
     if (isSpace && inWord) {
       wordIdx += 1;
@@ -545,10 +547,13 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
     const u1 = (g.x + g.width) / atlas.width;
     const v1 = (g.y + g.height) / atlas.height;
 
-    const glyphTint: readonly [number, number, number, number] =
+    let glyphTint: readonly [number, number, number, number] =
       fx && fx.opacity < 1
         ? [tint[0] * fx.opacity, tint[1] * fx.opacity, tint[2] * fx.opacity, tint[3] * fx.opacity]
         : tint;
+    // Color glyphs (emoji) carry their own colors — draw untinted (white at
+    // the same alpha); fill_color/gradient must not multiply them.
+    if (g.isColor) glyphTint = [glyphTint[3], glyphTint[3], glyphTint[3], glyphTint[3]];
 
     // Per-glyph text shadows, painted under every glyph (pass 0).
     if (drawShadowPass) {
@@ -567,7 +572,7 @@ export function renderTextElement(element: TextElement, ctx: RenderContext): voi
     if (drawFillPass) {
       // Gradient fill: sample the gradient at this glyph's REST layout box (NOT
       // its animated cell), so the color is pixel-true and travels with the glyph.
-      const gradientTint = glyphGradient
+      const gradientTint = glyphGradient && !g.isColor
         ? {
             kind: glyphGradient.kind,
             params: glyphGradient.params,
@@ -860,7 +865,7 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
       let cursorX = blockLeft + Math.max(0, contentWidth - line.width) * alignFrac;
       for (const sp of line.spans) {
         let pPrev = '';
-        for (const ch of sp.text) {
+        for (const ch of segmentGraphemes(sp.text)) {
           const isSpace = /\s/.test(ch);
           if (isSpace && pInWord) { pw += 1; pInWord = false; }
           else if (!isSpace) pInWord = true;
@@ -896,7 +901,7 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
     let inW = false;
     for (const line of wrappedLines) {
       for (const sp of line.spans) {
-        for (const ch of sp.text) {
+        for (const ch of segmentGraphemes(sp.text)) {
           const isSpace = /\s/.test(ch);
           if (isSpace && inW) { wordCount += 1; inW = false; }
           else if (!isSpace) inW = true;
@@ -1013,7 +1018,7 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
       ];
 
       let prevCh = '';
-      for (const ch of sp.text) {
+      for (const ch of segmentGraphemes(sp.text)) {
         const isSpace = /\s/.test(ch);
         if (isSpace && inWord) {
           wordIdx += 1;
@@ -1067,10 +1072,11 @@ function renderSpannedTextElement(element: TextElement, ctx: RenderContext): voi
         const v0 = g.y / sp.atlas.height;
         const u1 = (g.x + g.width) / sp.atlas.width;
         const v1 = (g.y + g.height) / sp.atlas.height;
-        const glyphTint: readonly [number, number, number, number] =
+        let glyphTint: readonly [number, number, number, number] =
           fx && fx.opacity < 1
             ? [tint[0] * fx.opacity, tint[1] * fx.opacity, tint[2] * fx.opacity, tint[3] * fx.opacity]
             : tint;
+        if (g.isColor) glyphTint = [glyphTint[3], glyphTint[3], glyphTint[3], glyphTint[3]];
         if (drawShadowPass) {
           const sw = g.width * sx, shh = g.height * sy;
           paintTextShadows(textShadows, fx && fx.opacity < 1 ? fx.opacity : 1, (ox, oy, col) => {
@@ -1206,13 +1212,15 @@ function resolveSpan(
     atlas = generateFontAtlas({ family, size, weight }, ctx.backend);
     ctx.fontAtlases.set(key, atlas);
   }
+  atlas = ensureAtlasGlyphs(atlas, ctx.backend, span.text);
+  ctx.fontAtlases.set(key, atlas);
 
   const letterSpacing = numberOr(span.letter_spacing, defaults.letterSpacing);
   // Kern within the span only (resets at span boundaries) — the draw
   // walk resets its pair state per span too, so widths stay exact.
   let width = 0;
   let prev = '';
-  for (const ch of span.text) {
+  for (const ch of segmentGraphemes(span.text)) {
     const g = atlas.glyphs.get(ch);
     if (g) {
       width += g.advance + letterSpacing + atlas.kern(prev, ch);

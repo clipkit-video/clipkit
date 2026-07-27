@@ -1,6 +1,6 @@
 {
   "name": "@clipkit/cli",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Clipkit CLI — init, new, validate, explain, preview, render, still, docs, schema, mcp, login. The local-first onboarding surface.",
   "license": "Apache-2.0",
   "repository": {

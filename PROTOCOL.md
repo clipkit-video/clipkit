@@ -2553,10 +2553,14 @@ rectangle's `(width, height)` to the shader and convert
 ### 12.3. Font atlases
 
 The reference runtime generates a glyph atlas per (family, size,
-weight). It covers ASCII (0x20–0x7E) only; characters outside this
-range are silently dropped. Third-party implementations MAY support
-larger glyph ranges; documents SHOULD avoid relying on non-ASCII text
-in v1.0 unless the target runtime is known to support it.
+weight), keyed by grapheme cluster and grown on demand to cover the
+characters a document actually uses — full Unicode including accented
+Latin, CJK, and color emoji (surrogate pairs, skin-tone modifiers and
+ZWJ sequences render as single glyphs). Color glyphs carry their own
+colors and are composited untinted; `fill_color`/`gradient` apply to
+monochrome glyphs only. Rendering a given script or emoji still
+requires a font for it on the host (the reference render container
+ships a color-emoji font).
 
 ### 12.4. Particle PRNG
 

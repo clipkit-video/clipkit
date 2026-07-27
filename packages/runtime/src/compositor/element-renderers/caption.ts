@@ -16,7 +16,7 @@ import { mat4ApplyToPoint, mat4Multiply, mat4PlaneAt, mat4Rotation, quadWorldTra
 import { resolveAnchor, resolveLength } from '../unit.js';
 import { resolveTextShadows, paintTextShadows } from './text.js';
 import { applyAnimation, resolve3D } from '../resolve.js';
-import { atlasKey, generateFontAtlas, type FontAtlas } from '../../text/font-atlas.js';
+import { atlasKey, ensureAtlasGlyphs, generateFontAtlas, segmentGraphemes, type FontAtlas } from '../../text/font-atlas.js';
 import { autoFitFontSize, withFontFallback } from '../../text/measure.js';
 import { chunkCaptionWords, activeCaptionChunk } from '../../text/caption-chunk.js';
 import { applyEasing } from '../../animation/easings.js';
@@ -37,6 +37,7 @@ interface WordLayout {
 }
 
 interface CharLayout {
+  isColor: boolean;
   /** Atlas tight bounding-box position. */
   glyphX: number;
   glyphY: number;
@@ -106,6 +107,8 @@ export function renderCaptionElement(element: CaptionElement, ctx: RenderContext
     atlas = generateFontAtlas({ family: fontFamily, size: fontSize, weight: fontWeight }, backend);
     ctx.fontAtlases.set(key, atlas);
   }
+  atlas = ensureAtlasGlyphs(atlas, backend, (element.words ?? []).map((w) => String((w as { text?: unknown }).text ?? '')).join(''));
+  ctx.fontAtlases.set(key, atlas);
 
   // Position the caption block. Animations can move the element as a whole.
   const localX = applyAnimation(element, 'x', resolveLength(element.x as never, canvas.width, canvas), ctx);
@@ -144,7 +147,7 @@ export function renderCaptionElement(element: CaptionElement, ctx: RenderContext
     : canvas.width * 0.9;
   const measure = (text: string): number => {
     let w = 0;
-    for (const ch of text) w += atlas.glyphs.get(ch)?.advance ?? 0;
+    for (const ch of segmentGraphemes(text)) w += atlas.glyphs.get(ch)?.advance ?? 0;
     return w;
   };
 
@@ -177,11 +180,11 @@ export function renderCaptionElement(element: CaptionElement, ctx: RenderContext
       const word = lineWords[wi]!;
       const wordCursorStart = cursorX;
       const startCharIdx = chars.length;
-      for (const ch of word.text) {
+      for (const ch of segmentGraphemes(word.text)) {
         const g = atlas.glyphs.get(ch);
         if (!g) continue;
         if (g.width > 0 && g.height > 0) {
-          chars.push({ glyphX: g.x, glyphY: g.y, glyphW: g.width, glyphH: g.height, cursorX, offsetX: g.offsetX, offsetY: g.offsetY, lineIndex: li });
+          chars.push({ glyphX: g.x, glyphY: g.y, glyphW: g.width, glyphH: g.height, cursorX, offsetX: g.offsetX, offsetY: g.offsetY, lineIndex: li, isColor: g.isColor });
         }
         cursorX += g.advance;
       }
@@ -344,7 +347,7 @@ export function renderCaptionElement(element: CaptionElement, ctx: RenderContext
             : undefined,
           texture: atlas.texture,
           uvRect: [u0, v0, u1, v1],
-          tint,
+          tint: ch.isColor ? ([tint[3], tint[3], tint[3], tint[3]] as const) : tint,
           blend: element.blend_mode,
         });
       }

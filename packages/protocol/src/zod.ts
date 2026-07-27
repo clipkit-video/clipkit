@@ -824,6 +824,17 @@ function checkElements(
     const el = raw as Record<string, unknown>;
     const elPath = [...path, i];
 
+    // `rotation` and `z_rotation` are the same in-plane slot — authoring
+    // both is ambiguous (one would silently win). HARD error, author one.
+    if (el.rotation !== undefined && el.z_rotation !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...elPath, 'z_rotation'],
+        message:
+          'both `rotation` and `z_rotation` are set — they are the same in-plane rotation slot; author exactly one',
+      });
+    }
+
     // Generated sets (§3.7): image/text/shape/group only. Other element
     // types silently ignoring `repeat` would render 1 copy where N were
     // authored — reject instead.

@@ -33,6 +33,26 @@ const ASCII_PRINTABLE =
   // Common symbols: euro, trademark, registered, arrows
   '€™←↑→↓';
 
+// ── Grapheme segmentation ──────────────────────────────────────────
+// The atlas is keyed by GRAPHEME CLUSTER, not UTF-16 unit or codepoint, so
+// surrogate pairs, skin-tone modifiers and ZWJ emoji families each occupy
+// one glyph and animate as one unit. Intl.Segmenter ships in every Chrome
+// the runtime targets; the fallback splits by codepoint.
+let _segmenter: Intl.Segmenter | null | undefined;
+export function segmentGraphemes(text: string): string[] {
+  if (_segmenter === undefined) {
+    _segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+      ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+      : null;
+  }
+  if (!_segmenter) return [...text];
+  const out: string[] = [];
+  for (const s of _segmenter.segment(text)) out.push(s.segment);
+  return out;
+}
+
+const DEFAULT_CHARSET: readonly string[] = [...new Set(segmentGraphemes(ASCII_PRINTABLE))];
+
 /** Per-character metrics within the atlas. */
 export interface AtlasGlyph {
   /**
@@ -52,6 +72,12 @@ export interface AtlasGlyph {
   offsetX: number;
   /** Offset from the baseline Y to the quad's top edge (always negative — top is above baseline). */
   offsetY: number;
+  /**
+   * True for glyphs that rasterize with their OWN colors (emoji). Draw
+   * untinted — `fill_color` must not multiply them; coverage glyphs keep
+   * the normal tint path.
+   */
+  isColor: boolean;
 }
 
 export interface FontAtlas {
@@ -63,8 +89,10 @@ export interface FontAtlas {
   /** Atlas dimensions in pixels (= texture.width × texture.height). */
   readonly width: number;
   readonly height: number;
-  /** Glyph map: char → metrics. */
+  /** Glyph map: grapheme → metrics. */
   readonly glyphs: ReadonlyMap<string, AtlasGlyph>;
+  /** The grapheme list this atlas was built from (for on-demand regrowth). */
+  readonly charset: readonly string[];
   /**
    * Font DESIGN ascent in pixels (fontBoundingBoxAscent) — what CSS
    * line layout centers in the line box. Not the ink bound.
@@ -102,6 +130,7 @@ export function atlasKey(k: FontAtlasKey): string {
 export function generateFontAtlas(
   key: FontAtlasKey,
   backend: Backend,
+  charset: readonly string[] = DEFAULT_CHARSET,
 ): FontAtlas {
   const { family, size, weight } = key;
   const canvas = typeof OffscreenCanvas !== 'undefined'
@@ -177,7 +206,7 @@ export function generateFontAtlas(
   }
   const metrics = new Map<string, GlyphMetrics>();
   let maxCellWidth = 0;
-  for (const ch of ASCII_PRINTABLE) {
+  for (const ch of charset) {
     const m = ctx.measureText(ch);
     const advance = m.width;
     const aLeft = m.actualBoundingBoxLeft || 0;
@@ -200,8 +229,8 @@ export function generateFontAtlas(
   const cellHeight = Math.ceil(ascent + descent + 2 * PADDING);
 
   // Layout in a square-ish grid.
-  const cols = Math.ceil(Math.sqrt(ASCII_PRINTABLE.length));
-  const rows = Math.ceil(ASCII_PRINTABLE.length / cols);
+  const cols = Math.ceil(Math.sqrt(charset.length));
+  const rows = Math.ceil(charset.length / cols);
   const atlasWidth = cols * cellWidth;
   const atlasHeight = rows * cellHeight;
 
@@ -231,8 +260,8 @@ export function generateFontAtlas(
   const AA_MARGIN = 2;
 
   const glyphs = new Map<string, AtlasGlyph>();
-  for (let i = 0; i < ASCII_PRINTABLE.length; i++) {
-    const ch = ASCII_PRINTABLE[i]!;
+  for (let i = 0; i < charset.length; i++) {
+    const ch = charset[i]!;
     const col = i % cols;
     const row = Math.floor(i / cols);
     const cellX = col * cellWidth;
@@ -269,11 +298,39 @@ export function generateFontAtlas(
       advance: m.advance,
       offsetX: glyphLeft - penX,
       offsetY: glyphTop - baselineY,
+      isColor: false,
     });
   }
 
+  // Color-glyph detection: emoji rasterize in their own colors regardless of
+  // fillStyle, so any glyph whose ink has chroma is a color glyph and must be
+  // drawn UNTINTED. One readback per atlas build (builds are rare + logged).
+  try {
+    const img = ctx.getImageData(0, 0, atlasWidth, atlasHeight);
+    const px = img.data;
+    for (const g of glyphs.values()) {
+      let color = false;
+      for (let yy = g.y; yy < g.y + g.height && !color; yy++) {
+        let idx = (yy * atlasWidth + g.x) * 4;
+        for (let xx = 0; xx < g.width; xx++, idx += 4) {
+          const a = px[idx + 3]!;
+          if (a > 16) {
+            const r = px[idx]!, gg = px[idx + 1]!, b = px[idx + 2]!;
+            if (Math.abs(r - gg) > 24 || Math.abs(gg - b) > 24 || Math.abs(r - b) > 24) {
+              color = true;
+              break;
+            }
+          }
+        }
+      }
+      if (color) g.isColor = true;
+    }
+  } catch {
+    // Readback can fail on exotic canvas backends; glyphs stay coverage-tinted.
+  }
+
   getLogger().debug(
-    `Generated font atlas: ${family} ${size}px ${weight} (${atlasWidth}×${atlasHeight}, ${ASCII_PRINTABLE.length} glyphs)`,
+    `Generated font atlas: ${family} ${size}px ${weight} (${atlasWidth}×${atlasHeight}, ${charset.length} glyphs)`,
   );
 
   const texture = backend.createTexture(canvas as HTMLCanvasElement);
@@ -313,6 +370,7 @@ export function generateFontAtlas(
     width: atlasWidth,
     height: atlasHeight,
     glyphs,
+    charset,
     // Exported ascent/descent are the DESIGN metrics used for line
     // layout. Cell geometry above keeps using the ink-bound values;
     // glyph offsets are baseline-relative, so the two never mix.
@@ -321,4 +379,31 @@ export function generateFontAtlas(
     lineHeight: cellHeight,
     kern,
   };
+}
+
+/**
+ * Ensure `atlas` has a glyph for every grapheme in `text`. Returns the same
+ * atlas when nothing is missing; otherwise regenerates the atlas with the
+ * union charset (existing order + new graphemes sorted — deterministic for a
+ * given Source), destroys the old texture, and returns the replacement.
+ * Callers must re-store the result in their cache.
+ */
+export function ensureAtlasGlyphs(
+  atlas: FontAtlas,
+  backend: Backend,
+  text: string,
+): FontAtlas {
+  let missing: Set<string> | null = null;
+  for (const ch of segmentGraphemes(text)) {
+    if (ch === '\n' || ch === '\r') continue;
+    if (!atlas.glyphs.has(ch)) (missing ??= new Set()).add(ch);
+  }
+  if (!missing) return atlas;
+  const next = generateFontAtlas(
+    { family: atlas.family, size: atlas.size, weight: atlas.weight },
+    backend,
+    [...atlas.charset, ...[...missing].sort()],
+  );
+  backend.destroyTexture(atlas.texture);
+  return next;
 }

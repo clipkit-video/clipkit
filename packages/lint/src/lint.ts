@@ -10,15 +10,6 @@ export interface LintWarning {
   message: string;
 }
 
-// The runtime text/caption renderer uses a fixed ASCII coverage-font atlas;
-// any non-ASCII glyph (emoji, accents, smart quotes, CJK) is silently dropped.
-const NON_ASCII = /[^\x00-\x7F]/;
-
-function firstNonAscii(s: string): string | null {
-  const m = NON_ASCII.exec(s);
-  return m ? m[0] : null;
-}
-
 export function lintSource(source: Source): LintWarning[] {
   const warnings: LintWarning[] = [];
   const comp = source as unknown as { duration?: number; elements?: unknown[] };
@@ -45,43 +36,6 @@ export function lintSource(source: Source): LintWarning[] {
         where: id,
         message: `Ends at ${(time + dur).toFixed(2)}s, past the composition's ${compDuration}s — it'll be cut off.`,
       });
-    }
-
-    // Non-ASCII in text-bearing fields (dropped by the ASCII atlas).
-    if (e.type === 'text') {
-      const texts: string[] = [];
-      if (typeof e.text === 'string') texts.push(e.text);
-      if (Array.isArray(e.spans)) {
-        for (const sp of e.spans) {
-          const t = (sp as { text?: unknown })?.text;
-          if (typeof t === 'string') texts.push(t);
-        }
-      }
-      for (const t of texts) {
-        const ch = firstNonAscii(t);
-        if (ch) {
-          warnings.push({
-            where: id,
-            message: `Text has a non-ASCII character ("${ch}") — the runtime's ASCII font atlas drops these (emoji, accents, smart quotes, CJK). Use plain ASCII.`,
-          });
-          break;
-        }
-      }
-    }
-    if (e.type === 'caption' && Array.isArray(e.words)) {
-      for (const w of e.words) {
-        const t = (w as { text?: unknown })?.text;
-        if (typeof t === 'string') {
-          const ch = firstNonAscii(t);
-          if (ch) {
-            warnings.push({
-              where: id,
-              message: `Caption word has a non-ASCII character ("${ch}") — dropped by the runtime's ASCII atlas.`,
-            });
-            break;
-          }
-        }
-      }
     }
   }
 
