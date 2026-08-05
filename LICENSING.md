@@ -38,27 +38,43 @@ Clipkit-rendering API, the hosted business that funds this whole project
 would be undercut by our own code. So both are BSL 1.1 — and both
 **auto-convert to Apache-2.0 four years after each release.**
 
+The BSL grant also carries a **production free tier**: organizations
+rendering more than 250 minutes of video per month in production
+self-host under a commercial license. That's how the project is funded by
+the companies rendering at commercial scale, instead of by restricting
+everyone.
+
 ## What BSL means for you (the part that matters)
 
-The BSL's Additional Use Grant is written to permit essentially everything
-except running a competing rendering service. In plain English:
+The BSL's Additional Use Grant permits essentially everything below a
+**production free tier of 250 minutes of rendered video output per
+calendar month** (per organization, dev/test/evaluation renders never
+count) — and everything at any volume except running a competing rendering
+service. In plain English:
 
 | Can I… | |
 |---|---|
 | Embed the runtime in my own app or website? | ✅ **Yes** |
 | Use the editor (which depends on the runtime)? | ✅ **Yes** — see next section |
 | Build my own editor, platform, or SaaS on top of the runtime? | ✅ **Yes** |
-| Render videos for my own product or app? | ✅ **Yes** |
-| Render videos **for my customers** as part of a broader product (e.g. a social-media automation tool)? | ✅ **Yes**, even commercially |
-| Use it internally at my company? | ✅ **Yes** |
-| Personal / educational / research use? | ✅ **Yes** |
-| Build my **own** independent Clipkit-Protocol renderer from scratch? | ✅ **Yes** |
+| Render videos for my own product or app? | ✅ **Yes**, within the free tier |
+| Render videos **for my customers** as part of a broader product (e.g. a social-media automation tool)? | ✅ **Yes**, even commercially, within the free tier |
+| Use it internally at my company? | ✅ **Yes**, within the free tier |
+| Personal / educational / research use? | ✅ **Yes** — **no volume limit** |
+| Non-commercial open-source projects? | ✅ **Yes** — **no volume limit** |
+| Build my **own** independent Clipkit-Protocol renderer from scratch? | ✅ **Yes** — the protocol is Apache-2.0 |
+| Render **more than 250 minutes/month in production**? | 💼 **Commercial license** — contact ianscott313@gmail.com |
 | Offer a hosted/managed service to third parties whose **primary purpose** is rendering Clipkit-Protocol documents into video? | ❌ **Not until the change date** (4 years) |
 | Call my product "Clipkit"? | ⚠️ Only per [TRADEMARK.md](./TRADEMARK.md) — you may say "Clipkit-compatible" |
 
-The single restricted case is the "fork-and-host a competing render API"
-play. If you're not selling Clipkit rendering *as the service*, BSL doesn't
-get in your way.
+Two things are reserved: the "fork-and-host a competing render API" play
+(not allowed at any volume), and **commercial-scale production rendering**
+(above 250 output-minutes/month), which requires a commercial license.
+250 minutes is over four hours of finished video shipped to production
+every month — personal projects, prototypes, and modest export features
+sit under it, and dev/test renders never count at all. If you're over it,
+video rendering is a real part of your business — and the commercial
+license will still cost far less than what you're rendering with today.
 
 ## "The editor is Apache but depends on a BSL runtime — what does that mean?"
 
@@ -66,9 +82,10 @@ Nothing scary. `@clipkit/editor`, `@clipkit/editor-core`, and
 `@clipkit/playback` are Apache-2.0. They depend on `@clipkit/runtime` (BSL),
 and the runtime's Additional Use Grant **explicitly permits embedding it as
 a dependency of the editor**. So you can install the editor, build your
-product on it, and ship it commercially. The BSL only ever bites if you use
-the runtime to run a competing hosted rendering service — which embedding
-the editor in your app is not.
+product on it, and ship it commercially. The BSL only bites if you use the
+runtime to run a competing hosted rendering service, or if your production
+rendering output passes 250 minutes/month — at which point you need a
+commercial license, not a different architecture.
 
 ## Why BSL over the alternatives
 
@@ -104,4 +121,12 @@ template is [BSL.template.md](./BSL.template.md).
   the same four-year Apache-2.0 conversion. Added the editor stack
   (`editor`, `editor-core`, `playback`, `sfx`) as Apache-2.0. Corrected
   `packages/schema` → `@clipkit/protocol` and `packages/sdk` → `@clipkit/editor`.
+- *2026-08-04* — **Added a production free tier to the BSL grant** (runtime
+  and render-service): production rendering above **250 output-minutes per
+  calendar month** per organization now requires a commercial license.
+  Dev/test/evaluation, personal/educational/research, and non-commercial
+  open-source use remain unlimited; the Competing-Service restriction is
+  unchanged. Applies to versions published from this date forward — versions
+  `1.0.0`–`1.3.1` of `@clipkit/runtime` keep the earlier, unlimited grant
+  permanently.
 </content>

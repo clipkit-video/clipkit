@@ -7,9 +7,16 @@ Licensor:              Clipkit Contributors
 Licensed Work:         @clipkit/runtime
                        The Licensed Work is (c) 2026 Clipkit Contributors
 
-Additional Use Grant:  You may make use of the Licensed Work, provided
-                       that you do not use the Licensed Work for a
-                       Competing Service.
+Additional Use Grant:  You may make production use of the Licensed
+                       Work, provided that:
+
+                       (a) you do not use the Licensed Work for a
+                           Competing Service; and
+
+                       (b) your Total Rendered Output does not exceed
+                           250 minutes in any calendar month, unless
+                           that use is covered by a separate commercial
+                           license from the Licensor.
 
                        A "Competing Service" is a commercial product or
                        service offered to third parties that provides
@@ -17,10 +24,24 @@ Additional Use Grant:  You may make use of the Licensed Work, provided
                        (whether offered as software-as-a-service, a
                        hosted API, or any similar offering whose primary
                        purpose is providing rendering of Clipkit
-                       Protocol documents).
+                       Protocol documents). A Competing Service is not
+                       permitted at any volume.
 
-                       For clarity, the following uses are NOT a
-                       Competing Service and ARE permitted:
+                       "Total Rendered Output" means the total duration,
+                       in minutes of finished video, rendered using the
+                       Licensed Work in production by or for your
+                       organization and its affiliates, across all
+                       deployments combined. Renders performed for
+                       development, testing, evaluation, or
+                       demonstration are not production use and do not
+                       count toward Total Rendered Output.
+
+                       The volume limit in (b) does not apply to:
+                         - personal, educational, or research use
+                         - non-commercial open-source projects
+
+                       For clarity, within the grant above, all of the
+                       following ARE permitted, including commercially:
                          - embedding the Licensed Work in your own
                            application or website (including as a
                            dependency of @clipkit/editor or other tools
@@ -29,18 +50,18 @@ Additional Use Grant:  You may make use of the Licensed Work, provided
                          - rendering videos for your own customers as
                            part of a broader product offering
                          - internal use within an organization
-                         - personal, educational, or research use
-                         - non-commercial open-source projects
                          - building your own independent implementation
-                           of the Clipkit Protocol
+                           of the Clipkit Protocol (the Protocol itself
+                           is Apache-2.0)
 
 Change Date:           Four years from the date the Licensed Work is
                        published.
 
 Change License:        Apache License, Version 2.0
 
-For information about alternative licensing arrangements for the
-Licensed Work, please contact ianscott313@gmail.com.
+For a commercial license covering production use above the volume
+limit — or any alternative licensing arrangement — please contact
+ianscott313@gmail.com.
 
 ----------------------------------------------------------------------
 
